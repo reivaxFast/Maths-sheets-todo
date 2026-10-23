@@ -1,0 +1,26 @@
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.xavierhoward.todo",
+    "productName": "Todo",
+    "icon": "icon.png",
+    "files": ["main.js", "index.html", "script.js", "style.css", "icon.png"],
+    "win": { "target": "nsis" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}

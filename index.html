@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Todo</title>
+    <link rel="icon" href="icon.png">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>Todo</h1>
+        <div class="actions">
+            <button id="courses-btn" type="button">Courses</button>
+            <button id="export-btn" type="button">Export</button>
+            <button id="import-btn" type="button">Import</button>
+            <input id="import-file" type="file" accept=".json,application/json" hidden>
+        </div>
+    </header>
+    <div id="message" hidden></div>
+    <form id="add-form">
+        <select id="task-course" title="Course" required></select>
+        <input id="task-sheet" type="text" inputmode="numeric" placeholder="Sheet no." title="Sheet number" required>
+        <input id="task-due" type="date" required>
+        <input id="task-time" type="time" title="Submission time" required>
+        <button type="submit">Add</button>
+    </form>
+    <section>
+        <h2>Incomplete <span class="count" id="count-incomplete"></span></h2>
+        <ul class="task-list" id="list-incomplete"></ul>
+    </section>
+    <section>
+        <h2>Completed <span class="count" id="count-complete"></span></h2>
+        <ul class="task-list" id="list-complete"></ul>
+    </section>
+    <section>
+        <h2>Submitted <span class="count" id="count-submitted"></span></h2>
+        <ul class="task-list" id="list-submitted"></ul>
+    </section>
+    <div id="pdf-viewer" hidden>
+        <div class="pdf-bar">
+            <span id="pdf-title"></span>
+            <button id="pdf-close" type="button">Close</button>
+        </div>
+        <iframe id="pdf-frame" title="PDF viewer"></iframe>
+    </div>
+    <div id="courses-modal" class="modal" hidden>
+        <div class="modal-box">
+            <div class="modal-head">
+                <h2>Courses</h2>
+                <button id="courses-close" type="button">Close</button>
+            </div>
+            <ul id="course-list"></ul>
+            <form id="course-form">
+                <input id="course-name" type="text" placeholder="Course name" required>
+                <input id="course-tutor" type="text" placeholder="Tutor name" required>
+                <input id="course-email" type="email" placeholder="Tutor email" required>
+                <button type="submit">Add course</button>
+                <textarea id="course-notes" rows="2" placeholder="Submission notes, e.g. upload to Moodle, print and hand in, file naming rules…"></textarea>
+            </form>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

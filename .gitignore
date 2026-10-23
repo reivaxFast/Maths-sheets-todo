@@ -1,0 +1,17 @@
+# Dependencies (reinstalled with npm install)
+node_modules/
+
+# Built installers from electron-builder
+dist/
+
+# Local editor / tool settings
+.claude/
+.vscode/
+
+# OS clutter
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs
+npm-debug.log*
