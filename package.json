@@ -1,6 +1,6 @@
 {
   "name": "my-app",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "",
   "main": "main.js",
   "keywords": [],
@@ -19,11 +19,28 @@
     "appId": "com.xavierhoward.todo",
     "productName": "Todo",
     "icon": "icon.png",
-    "files": ["main.js", "preload.js", "index.html", "script.js", "style.css", "icon.png"],
-    "fileAssociations": [
-      { "ext": "todo", "name": "Todo export", "description": "Todo tasks export", "role": "Editor" }
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "script.js",
+      "style.css",
+      "icon.png"
     ],
-    "win": { "target": "nsis" },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+    "fileAssociations": [
+      {
+        "ext": "todo",
+        "name": "Todo export",
+        "description": "Todo tasks export",
+        "role": "Editor"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
