@@ -19,7 +19,10 @@
     "appId": "com.xavierhoward.todo",
     "productName": "Todo",
     "icon": "icon.png",
-    "files": ["main.js", "index.html", "script.js", "style.css", "icon.png"],
+    "files": ["main.js", "preload.js", "index.html", "script.js", "style.css", "icon.png"],
+    "fileAssociations": [
+      { "ext": "todo", "name": "Todo export", "description": "Todo tasks export", "role": "Editor" }
+    ],
     "win": { "target": "nsis" },
     "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
   }

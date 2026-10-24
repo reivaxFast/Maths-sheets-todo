@@ -13,7 +13,7 @@
             <button id="courses-btn" type="button">Courses</button>
             <button id="export-btn" type="button">Export</button>
             <button id="import-btn" type="button">Import</button>
-            <input id="import-file" type="file" accept=".json,application/json" hidden>
+            <input id="import-file" type="file" accept=".todo,.json,application/json" hidden>
         </div>
     </header>
     <div id="message" hidden></div>
@@ -36,13 +36,6 @@
         <h2>Submitted <span class="count" id="count-submitted"></span></h2>
         <ul class="task-list" id="list-submitted"></ul>
     </section>
-    <div id="pdf-viewer" hidden>
-        <div class="pdf-bar">
-            <span id="pdf-title"></span>
-            <button id="pdf-close" type="button">Close</button>
-        </div>
-        <iframe id="pdf-frame" title="PDF viewer"></iframe>
-    </div>
     <div id="courses-modal" class="modal" hidden>
         <div class="modal-box">
             <div class="modal-head">

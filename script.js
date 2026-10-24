@@ -44,7 +44,18 @@ function courseOf(task) {
   return courses.find(c => c.id === task.courseId) || null;
 }
 
-// PDFs are too large for localStorage, so they live in IndexedDB keyed by task id
+// Each task can hold two PDFs. `field` is the task property holding the file name;
+// submissions are keyed by plain task id (as before), problem sheets by "id:problem".
+const PDF_KINDS = {
+  problem: { field: 'problemName', key: id => `${id}:problem`, icon: '📋', label: 'Problem sheet' },
+  work: { field: 'pdfName', key: id => id, icon: '📄', label: 'Submission' },
+};
+
+function pdfKeys(task) {
+  return Object.values(PDF_KINDS).filter(k => task[k.field]).map(k => k.key(task.id));
+}
+
+// PDFs are too large for localStorage, so they live in IndexedDB
 const dbReady = new Promise((resolve, reject) => {
   const req = indexedDB.open('todo-files', 1);
   req.onupgradeneeded = () => req.result.createObjectStore('pdfs');
@@ -67,7 +78,7 @@ const deletePdf = id => pdfStore('readwrite', s => s.delete(id));
 const pdfInput = document.createElement('input');
 pdfInput.type = 'file';
 pdfInput.accept = 'application/pdf,.pdf';
-let pdfTarget = null;
+let pdfTarget = null; // { task, kind }
 
 pdfInput.addEventListener('change', async () => {
   const file = pdfInput.files[0];
@@ -77,42 +88,36 @@ pdfInput.addEventListener('change', async () => {
     showMessage('Please choose a PDF file.', true);
     return;
   }
+  const { task, kind } = pdfTarget;
   try {
-    await putPdf(pdfTarget.id, file);
+    await putPdf(kind.key(task.id), file);
   } catch {
     showMessage("Couldn't save that PDF.", true);
     return;
   }
-  pdfTarget.pdfName = file.name;
+  task[kind.field] = file.name;
   save();
   render();
 });
 
-const viewer = document.getElementById('pdf-viewer');
-const viewerFrame = document.getElementById('pdf-frame');
-const viewerTitle = document.getElementById('pdf-title');
-
-async function openPdf(task) {
-  const blob = await getPdf(task.id);
+async function openPdf(task, kind) {
+  const blob = await getPdf(kind.key(task.id));
   if (!blob) {
     showMessage("That PDF couldn't be found.", true);
     return;
   }
-  viewerTitle.textContent = task.pdfName;
-  viewerFrame.src = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
-  viewer.hidden = false;
+  if (window.files) {
+    // In the app: saved to a temp file and opened in the default browser
+    const result = await window.files.openPdf(task[kind.field], await blob.arrayBuffer());
+    if (!result.ok) showMessage("Couldn't open that PDF in your browser.", true);
+  } else {
+    // Running in a plain browser (e.g. testing): open in a new tab
+    window.open(URL.createObjectURL(new Blob([blob], { type: 'application/pdf' })));
+  }
 }
 
-function closePdf() {
-  URL.revokeObjectURL(viewerFrame.src);
-  viewerFrame.src = 'about:blank';
-  viewer.hidden = true;
-}
-document.getElementById('pdf-close').addEventListener('click', closePdf);
 document.addEventListener('keydown', e => {
-  if (e.key !== 'Escape') return;
-  if (!viewer.hidden) closePdf();
-  else if (!coursesModal.hidden) closeCourses();
+  if (e.key === 'Escape' && !coursesModal.hidden) closeCourses();
 });
 
 function today() {
@@ -216,32 +221,35 @@ function render() {
 
     const pdf = document.createElement('div');
     pdf.className = 'pdf';
-    if (task.pdfName) {
-      const view = document.createElement('button');
-      view.className = 'pdf-link';
-      view.title = 'View PDF';
-      view.textContent = '📄 ' + task.pdfName;
-      view.addEventListener('click', () => openPdf(task));
-      const remove = document.createElement('button');
-      remove.className = 'pdf-remove';
-      remove.title = 'Remove PDF';
-      remove.textContent = '×';
-      remove.addEventListener('click', async () => {
-        await deletePdf(task.id);
-        delete task.pdfName;
-        save();
-        render();
-      });
-      pdf.append(view, remove);
-    } else {
-      const attach = document.createElement('button');
-      attach.className = 'pdf-attach';
-      attach.textContent = '+ Attach PDF';
-      attach.addEventListener('click', () => {
-        pdfTarget = task;
-        pdfInput.click();
-      });
-      pdf.append(attach);
+    for (const kind of Object.values(PDF_KINDS)) {
+      const name = task[kind.field];
+      if (name) {
+        const view = document.createElement('button');
+        view.className = 'pdf-link';
+        view.title = `${kind.label}: ${name} (opens in your browser)`;
+        view.textContent = `${kind.icon} ${name}`;
+        view.addEventListener('click', () => openPdf(task, kind));
+        const remove = document.createElement('button');
+        remove.className = 'pdf-remove';
+        remove.title = `Remove ${kind.label.toLowerCase()}`;
+        remove.textContent = '×';
+        remove.addEventListener('click', async () => {
+          await deletePdf(kind.key(task.id));
+          delete task[kind.field];
+          save();
+          render();
+        });
+        pdf.append(view, remove);
+      } else {
+        const attach = document.createElement('button');
+        attach.className = 'pdf-attach';
+        attach.textContent = `+ ${kind.label}`;
+        attach.addEventListener('click', () => {
+          pdfTarget = { task, kind };
+          pdfInput.click();
+        });
+        pdf.append(attach);
+      }
     }
     info.append(pdf);
 
@@ -287,15 +295,16 @@ function render() {
 
 const UNDO_SECONDS = 8;
 
-// The PDF is kept until the undo window has passed, so Undo brings it back too
+// The PDFs are kept until the undo window has passed, so Undo brings them back too
 function deleteTask(task) {
   const index = tasks.indexOf(task);
   tasks.splice(index, 1);
   save();
   render();
 
-  const pdfTimer = task.pdfName
-    ? setTimeout(() => deletePdf(task.id), UNDO_SECONDS * 1000 + 500)
+  const keys = pdfKeys(task);
+  const pdfTimer = keys.length
+    ? setTimeout(() => keys.forEach(deletePdf), UNDO_SECONDS * 1000 + 500)
     : null;
   showMessage(`Deleted ${taskTitle(task)}`, false, {
     label: 'Undo',
@@ -310,9 +319,9 @@ function deleteTask(task) {
 
 // Removes PDFs left behind if the app closed during an undo window
 async function cleanUpPdfs() {
-  const ids = new Set(tasks.filter(t => t.pdfName).map(t => t.id));
+  const keys = new Set(tasks.flatMap(pdfKeys));
   for (const key of await pdfStore('readonly', s => s.getAllKeys())) {
-    if (!ids.has(key)) deletePdf(key);
+    if (!keys.has(key)) deletePdf(key);
   }
 }
 
@@ -507,19 +516,65 @@ function showMessage(text, isError, action) {
 }
 
 // Export / import
+//
+// Exports are .todo files: JSON holding courses, tasks and each task's problem sheet PDF
+// (base64). Submissions aren't included. Older .json exports (a plain task array, or
+// { tasks, courses }) still import as they are.
 
-document.getElementById('export-btn').addEventListener('click', () => {
-  if (tasks.length === 0) {
-    showMessage('No tasks to export.', true);
+const EXPORT_FORMAT = 'todo-export';
+const EXPORT_VERSION = 2;
+
+function bytesToBase64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+document.getElementById('export-btn').addEventListener('click', async () => {
+  if (tasks.length === 0 && courses.length === 0) {
+    showMessage('Nothing to export yet.', true);
     return;
   }
-  const data = { tasks, courses };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+
+  const problemSheets = {};
+  for (const task of tasks) {
+    if (!task.problemName) continue;
+    const blob = await getPdf(PDF_KINDS.problem.key(task.id));
+    if (!blob) continue;
+    problemSheets[task.id] = {
+      name: task.problemName,
+      data: bytesToBase64(new Uint8Array(await blob.arrayBuffer())),
+    };
+  }
+
+  const data = {
+    format: EXPORT_FORMAT,
+    version: EXPORT_VERSION,
+    exportedAt: new Date().toISOString(),
+    courses,
+    // Submission file names are left out, since the PDFs themselves aren't exported
+    tasks: tasks.map(({ pdfName, ...t }) => t),
+    problemSheets,
+  };
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/octet-stream' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `tasks-${today()}.json`;
+  a.download = `tasks-${today()}.todo`;
   a.click();
   URL.revokeObjectURL(a.href);
+
+  const n = Object.keys(problemSheets).length;
+  showMessage(`Exported ${tasks.length} task${tasks.length === 1 ? '' : 's'}` +
+    (n ? ` with ${n} problem sheet${n === 1 ? '' : 's'}.` : '.'));
 });
 
 const importFile = document.getElementById('import-file');
@@ -528,20 +583,30 @@ document.getElementById('import-btn').addEventListener('click', () => importFile
 importFile.addEventListener('change', async () => {
   const file = importFile.files[0];
   importFile.value = '';
-  if (!file) return;
+  if (file) await importText(await file.text());
+});
 
+// Double-clicking a .todo file opens the app, which passes the file in here
+window.files?.onImportFile(file => importText(file.text));
+
+async function importText(text) {
   let data;
   try {
-    data = JSON.parse(await file.text());
+    data = JSON.parse(text);
   } catch {
     showMessage("That file isn't a valid task export.", true);
     return;
   }
-  // Older exports were a plain array of tasks with no courses
+  // Oldest exports were a plain array of tasks with no courses
   const incomingTasks = Array.isArray(data) ? data : data?.tasks;
   const incomingCourses = Array.isArray(data?.courses) ? data.courses : [];
+  const incomingSheets = data && typeof data.problemSheets === 'object' ? data.problemSheets : {};
   if (!Array.isArray(incomingTasks)) {
     showMessage("That file isn't a valid task export.", true);
+    return;
+  }
+  if (data.format === EXPORT_FORMAT && data.version > EXPORT_VERSION) {
+    showMessage('That file was made by a newer version of the app. Please update to import it.', true);
     return;
   }
 
@@ -562,35 +627,56 @@ importFile.addEventListener('change', async () => {
     addedCourses++;
   }
 
+  // Saves a task's problem sheet from the file; returns true if one was added
+  async function importSheet(task, sheet) {
+    if (!sheet || typeof sheet.name !== 'string' || typeof sheet.data !== 'string') return false;
+    try {
+      const file = new Blob([base64ToBytes(sheet.data)], { type: 'application/pdf' });
+      await putPdf(PDF_KINDS.problem.key(task.id), file);
+    } catch {
+      return false;
+    }
+    task.problemName = sheet.name;
+    return true;
+  }
+
   const validStatuses = STATUSES.map(s => s.id);
-  // Skip tasks already in the list so importing the same file twice doesn't duplicate them
-  const existing = new Set(tasks.map(t => t.id));
   let added = 0;
+  let addedSheets = 0;
   for (const t of incomingTasks) {
     if (!t || !isDate(t.due)) continue;
     // Tasks are sheets now, but older exports have typed text instead
     const hasSheet = typeof t.sheet === 'string' && t.sheet.trim() !== '';
     if (!hasSheet && typeof t.text !== 'string') continue;
-    if (existing.has(t.id)) continue;
-    const id = typeof t.id === 'number' ? t.id : nextId();
-    tasks.push({
-      id,
+
+    // A task already in the list isn't duplicated, but gets the problem sheet if it lacks one
+    const existing = tasks.find(e => e.id === t.id);
+    if (existing) {
+      if (!existing.problemName && await importSheet(existing, incomingSheets[t.id])) addedSheets++;
+      continue;
+    }
+
+    const task = {
+      id: typeof t.id === 'number' ? t.id : nextId(),
       ...(hasSheet ? { sheet: t.sheet.trim() } : { text: t.text }),
       due: t.due,
       ...(isTime(t.time) && { time: t.time }),
       status: validStatuses.includes(t.status) ? t.status : null,
       courseId: courseIds.has(t.courseId) ? t.courseId : null,
-    });
-    existing.add(id);
+    };
+    if (await importSheet(task, incomingSheets[t.id])) addedSheets++;
+    tasks.push(task);
     added++;
   }
   save();
   render();
+
   const parts = [];
   if (added) parts.push(`${added} task${added === 1 ? '' : 's'}`);
   if (addedCourses) parts.push(`${addedCourses} course${addedCourses === 1 ? '' : 's'}`);
-  showMessage(parts.length ? `Imported ${parts.join(' and ')}.` : 'No new tasks to import.');
-});
+  if (addedSheets) parts.push(`${addedSheets} problem sheet${addedSheets === 1 ? '' : 's'}`);
+  showMessage(parts.length ? `Imported ${parts.join(', ')}.` : 'Nothing new to import.');
+}
 
 dueInput.value = today();
 render();
