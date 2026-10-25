@@ -23,6 +23,7 @@
       "main.js",
       "preload.js",
       "index.html",
+      "sync.js",
       "script.js",
       "style.css",
       "icon.png"
@@ -42,5 +43,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     }
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.118.0"
   }
 }

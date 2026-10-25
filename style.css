@@ -33,6 +33,85 @@ header {
     border-color: #7c6cf0;
     color: #fff;
 }
+#sync-btn[hidden] { display: none; }
+/* A coloured dot shows the sync state once signed in */
+#sync-btn.synced::before, #sync-btn.syncing::before, #sync-btn.offline::before {
+    content: '';
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    margin-right: 0.45rem;
+    border-radius: 50%;
+    vertical-align: 0.05rem;
+}
+#sync-btn.synced::before { background: #4caf7a; }
+#sync-btn.syncing::before { background: #e0b341; }
+#sync-btn.offline::before { background: #888; }
+
+.sync-box {
+    width: min(440px, calc(100% - 2rem));
+}
+.sync-box form, #account {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+.sync-box form[hidden], #account[hidden] { display: none; }
+.sync-box p {
+    margin: 0;
+    color: #ccc;
+    line-height: 1.4;
+}
+.sync-box .muted { color: #999; font-size: 0.9rem; }
+.sync-box input {
+    padding: 0.5rem;
+    font-size: 1rem;
+    background: #2a2a3c;
+    color: #eee;
+    border: 1px solid #44445a;
+    border-radius: 6px;
+}
+#code-boxes {
+    display: flex;
+    justify-content: center;
+    gap: 0.5rem;
+}
+#code-boxes input {
+    width: 2.6rem;
+    height: 3rem;
+    padding: 0;
+    font-size: 1.5rem;
+    text-align: center;
+}
+#code-boxes input:focus {
+    outline: none;
+    border-color: #7c6cf0;
+    box-shadow: 0 0 0 2px rgba(124, 108, 240, 0.35);
+}
+.sync-box button {
+    font-size: 0.95rem;
+    background: #7c6cf0;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+}
+.sync-box button:disabled { opacity: 0.6; cursor: default; }
+.sync-box button.secondary {
+    background: transparent;
+    color: #ccc;
+    border: 1px solid #44445a;
+}
+.sync-box button.secondary:hover { border-color: #7c6cf0; color: #fff; }
+.sync-box button.danger { color: #f0a0a0; }
+.sync-box button.danger:hover { border-color: #f07171; color: #f07171; }
+#sync-error {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: #3a2428;
+    color: #f0a0a0;
+    border-radius: 6px;
+}
+#sync-error[hidden] { display: none; }
 #message {
     position: fixed;
     left: 50%;
@@ -202,7 +281,7 @@ h2 {
     margin-bottom: 1rem;
 }
 .modal-head h2 { margin: 0; }
-#courses-close {
+#courses-close, #sync-close {
     font-size: 0.9rem;
     padding: 0.35rem 0.9rem;
     background: transparent;
@@ -240,6 +319,11 @@ h2 {
     background: transparent;
     border-color: #33334a;
     color: #bbb;
+}
+
+.course-files {
+    flex: 1 1 100%;
+    margin-top: 0;
 }
 
 .task-notes {

@@ -10,6 +10,7 @@
     <header>
         <h1>Todo</h1>
         <div class="actions">
+            <button id="sync-btn" type="button">Sign in to sync</button>
             <button id="courses-btn" type="button">Courses</button>
             <button id="export-btn" type="button">Export</button>
             <button id="import-btn" type="button">Import</button>
@@ -52,6 +53,34 @@
             </form>
         </div>
     </div>
+    <div id="sync-modal" class="modal" hidden>
+        <div class="modal-box sync-box">
+            <div class="modal-head">
+                <h2 id="sync-title">Sign in to sync</h2>
+                <button id="sync-close" type="button">Close</button>
+            </div>
+            <form id="email-form">
+                <p>Keep your tasks, courses and PDFs in sync across your devices. Enter your email and we'll send you a sign-in code. No password needed.</p>
+                <input id="sync-email" type="email" placeholder="Email address" autocomplete="email" required>
+                <button type="submit">Send code</button>
+            </form>
+            <form id="code-form" hidden>
+                <p id="code-sent"></p>
+                <div id="code-boxes" role="group" aria-label="Sign-in code"></div>
+                <button type="submit">Sign in</button>
+                <button id="code-back" class="secondary" type="button">Use a different email</button>
+            </form>
+            <div id="account" hidden>
+                <p>Signed in as <strong id="account-email"></strong></p>
+                <p id="account-status" class="muted"></p>
+                <button id="sign-out" class="secondary" type="button">Sign out</button>
+                <button id="sign-out-clear" class="secondary danger" type="button">Sign out and remove data from this computer</button>
+            </div>
+            <p id="sync-error" hidden></p>
+        </div>
+    </div>
+    <script src="node_modules/@supabase/supabase-js/dist/umd/supabase.js"></script>
+    <script src="sync.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

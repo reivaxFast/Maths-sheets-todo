@@ -31,12 +31,14 @@ function load(key) {
 function save() {
   localStorage.setItem('tasks', JSON.stringify(tasks));
   localStorage.setItem('courses', JSON.stringify(courses));
+  syncChanged();
 }
 
-// Timestamp-based ids, bumped so two items made in the same millisecond never collide
+// Timestamp-based ids with random last digits, so items made at the same moment on two
+// synced devices don't collide, bumped so two made here in one millisecond don't either
 let lastId = 0;
 function nextId() {
-  lastId = Math.max(Date.now(), lastId + 1);
+  lastId = Math.max(Date.now() * 1000 + Math.floor(Math.random() * 1000), lastId + 1);
   return lastId;
 }
 
@@ -53,6 +55,20 @@ const PDF_KINDS = {
 
 function pdfKeys(task) {
   return Object.values(PDF_KINDS).filter(k => task[k.field]).map(k => k.key(task.id));
+}
+
+// Courses hold any number of notes PDFs in `files` ([{ id, name }]), keyed by "courseId:notes:fileId"
+const noteKey = (course, file) => `${course.id}:notes:${file.id}`;
+
+// The PDFs an item refers to, as a Map of storage key to file name
+function taskPdfs(task) {
+  return new Map(Object.values(PDF_KINDS).filter(k => task[k.field]).map(k => [k.key(task.id), task[k.field]]));
+}
+function coursePdfs(course) {
+  return new Map((course.files || []).map(f => [noteKey(course, f), f.name]));
+}
+function storedPdfs() {
+  return new Map([...tasks.flatMap(t => [...taskPdfs(t)]), ...courses.flatMap(c => [...coursePdfs(c)])]);
 }
 
 // PDFs are too large for localStorage, so they live in IndexedDB
@@ -100,15 +116,45 @@ pdfInput.addEventListener('change', async () => {
   render();
 });
 
-async function openPdf(task, kind) {
-  const blob = await getPdf(kind.key(task.id));
+const notesInput = document.createElement('input');
+notesInput.type = 'file';
+notesInput.accept = 'application/pdf,.pdf';
+notesInput.multiple = true;
+let notesCourse = null;
+
+notesInput.addEventListener('change', async () => {
+  const files = [...notesInput.files];
+  notesInput.value = '';
+  if (!notesCourse) return;
+  const pdfs = files.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  if (pdfs.length < files.length) showMessage('Only PDF files can be added as course notes.', true);
+  notesCourse.files ||= [];
+  for (const file of pdfs) {
+    const entry = { id: nextId(), name: file.name };
+    try {
+      await putPdf(noteKey(notesCourse, entry), file);
+    } catch {
+      showMessage(`Couldn't save ${file.name}.`, true);
+      continue;
+    }
+    notesCourse.files.push(entry);
+  }
+  save();
+  render();
+});
+
+async function openPdf(key, name) {
+  // Not here yet if it was attached on another device
+  const blob = await getPdf(key) || await remotePdf(key);
   if (!blob) {
-    showMessage("That PDF couldn't be found.", true);
+    showMessage(user
+      ? "That PDF couldn't be found. If it was added on another device, try again once that device has synced."
+      : "That PDF couldn't be found.", true);
     return;
   }
   if (window.files) {
     // In the app: saved to a temp file and opened in the default browser
-    const result = await window.files.openPdf(task[kind.field], await blob.arrayBuffer());
+    const result = await window.files.openPdf(name, await blob.arrayBuffer());
     if (!result.ok) showMessage("Couldn't open that PDF in your browser.", true);
   } else {
     // Running in a plain browser (e.g. testing): open in a new tab
@@ -228,7 +274,7 @@ function render() {
         view.className = 'pdf-link';
         view.title = `${kind.label}: ${name} (opens in your browser)`;
         view.textContent = `${kind.icon} ${name}`;
-        view.addEventListener('click', () => openPdf(task, kind));
+        view.addEventListener('click', () => openPdf(kind.key(task.id), name));
         const remove = document.createElement('button');
         remove.className = 'pdf-remove';
         remove.title = `Remove ${kind.label.toLowerCase()}`;
@@ -319,7 +365,7 @@ function deleteTask(task) {
 
 // Removes PDFs left behind if the app closed during an undo window
 async function cleanUpPdfs() {
-  const keys = new Set(tasks.flatMap(pdfKeys));
+  const keys = new Set(storedPdfs().keys());
   for (const key of await pdfStore('readonly', s => s.getAllKeys())) {
     if (!keys.has(key)) deletePdf(key);
   }
@@ -471,20 +517,59 @@ function renderCourses() {
       render();
     });
 
+    const files = document.createElement('div');
+    files.className = 'pdf course-files';
+    for (const file of course.files || []) {
+      const view = document.createElement('button');
+      view.type = 'button';
+      view.className = 'pdf-link';
+      view.title = `Course notes: ${file.name} (opens in your browser)`;
+      view.textContent = `📚 ${file.name}`;
+      view.addEventListener('click', () => openPdf(noteKey(course, file), file.name));
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'pdf-remove';
+      remove.title = 'Remove these notes';
+      remove.textContent = '×';
+      remove.addEventListener('click', async () => {
+        await deletePdf(noteKey(course, file));
+        course.files = course.files.filter(f => f.id !== file.id);
+        save();
+        render();
+      });
+      files.append(view, remove);
+    }
+    const attach = document.createElement('button');
+    attach.type = 'button';
+    attach.className = 'pdf-attach';
+    attach.textContent = '+ Course notes';
+    attach.title = 'Add lecture notes or other PDFs for this course (you can pick several)';
+    attach.addEventListener('click', () => {
+      notesCourse = course;
+      notesInput.click();
+    });
+    files.append(attach);
+
     const used = tasks.filter(t => t.courseId === course.id).length;
+    const noteCount = course.files?.length || 0;
     const del = document.createElement('button');
     del.className = 'delete';
     del.type = 'button';
     del.title = used ? `Delete course (${used} task${used === 1 ? '' : 's'} will have no course)` : 'Delete course';
     del.textContent = '×';
     del.addEventListener('click', () => {
-      if (used && !confirm(`Delete "${course.name}"? ${used} task${used === 1 ? '' : 's'} will be left with no course.`)) return;
+      const losing = [
+        used && `${used} task${used === 1 ? '' : 's'} will be left with no course`,
+        noteCount && `its ${noteCount} course notes PDF${noteCount === 1 ? '' : 's'} will be deleted`,
+      ].filter(Boolean);
+      if (losing.length && !confirm(`Delete "${course.name}"? ${losing.join(', and ')}.`)) return;
+      for (const key of coursePdfs(course).keys()) deletePdf(key);
       courses = courses.filter(c => c.id !== course.id);
       for (const t of tasks) if (t.courseId === course.id) t.courseId = null;
       save();
       render();
     });
-    li.append(del, notes);
+    li.append(del, notes, files);
     courseList.append(li);
   }
 }
@@ -548,7 +633,8 @@ document.getElementById('export-btn').addEventListener('click', async () => {
   const problemSheets = {};
   for (const task of tasks) {
     if (!task.problemName) continue;
-    const blob = await getPdf(PDF_KINDS.problem.key(task.id));
+    const key = PDF_KINDS.problem.key(task.id);
+    const blob = await getPdf(key) || await remotePdf(key);
     if (!blob) continue;
     problemSheets[task.id] = {
       name: task.problemName,
@@ -560,7 +646,8 @@ document.getElementById('export-btn').addEventListener('click', async () => {
     format: EXPORT_FORMAT,
     version: EXPORT_VERSION,
     exportedAt: new Date().toISOString(),
-    courses,
+    // Course notes aren't exported, so their file lists are left out
+    courses: courses.map(({ files, ...c }) => c),
     // Submission file names are left out, since the PDFs themselves aren't exported
     tasks: tasks.map(({ pdfName, ...t }) => t),
     problemSheets,
@@ -681,3 +768,4 @@ async function importText(text) {
 dueInput.value = today();
 render();
 cleanUpPdfs();
+startCloud();
