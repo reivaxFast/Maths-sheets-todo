@@ -15,3 +15,6 @@ Desktop.ini
 
 # Logs
 npm-debug.log*
+
+# Web files copied for the Android app (npm run build:web)
+www/

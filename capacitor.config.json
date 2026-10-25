@@ -1,0 +1,13 @@
+{
+  "appId": "com.xavierhoward.todo",
+  "appName": "Todo",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#1e1e2e"
+  },
+  "plugins": {
+    "SystemBars": {
+      "style": "DARK"
+    }
+  }
+}

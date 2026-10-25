@@ -8,12 +8,15 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
+    "@capacitor/cli": "^8.5.3",
     "electron": "^45.0.0",
     "electron-builder": "^26.15.3"
   },
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "build:web": "node scripts/build-web.js",
+    "android": "npm run build:web && cap sync android"
   },
   "build": {
     "appId": "com.xavierhoward.todo",
@@ -24,9 +27,12 @@
       "preload.js",
       "index.html",
       "sync.js",
+      "mobile.js",
       "script.js",
       "style.css",
-      "icon.png"
+      "icon.png",
+      "!node_modules/@capacitor/**",
+      "!node_modules/@capacitor-community/**"
     ],
     "fileAssociations": [
       {
@@ -45,6 +51,11 @@
     }
   },
   "dependencies": {
+    "@capacitor-community/file-opener": "^8.0.1",
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/filesystem": "^8.1.5",
+    "@capacitor/share": "^8.0.3",
     "@supabase/supabase-js": "^2.118.0"
   }
 }

@@ -652,10 +652,17 @@ document.getElementById('export-btn').addEventListener('click', async () => {
     tasks: tasks.map(({ pdfName, ...t }) => t),
     problemSheets,
   };
+  const name = `tasks-${today()}.todo`;
+  if (window.files?.saveExport) {
+    // On Android: handed to the share sheet, since there's no downloads folder to save into
+    const result = await window.files.saveExport(name, JSON.stringify(data));
+    if (!result.ok) showMessage("Couldn't export your tasks.", true);
+    return;
+  }
   const blob = new Blob([JSON.stringify(data)], { type: 'application/octet-stream' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `tasks-${today()}.todo`;
+  a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
 
