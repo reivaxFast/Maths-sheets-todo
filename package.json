@@ -20,7 +20,7 @@
   },
   "build": {
     "appId": "com.xavierhoward.todo",
-    "productName": "Todo",
+    "productName": "Worksheets",
     "icon": "icon.png",
     "files": [
       "main.js",
@@ -37,8 +37,8 @@
     "fileAssociations": [
       {
         "ext": "todo",
-        "name": "Todo export",
-        "description": "Todo tasks export",
+        "name": "Worksheets export",
+        "description": "Worksheets tasks export",
         "role": "Editor"
       }
     ],
