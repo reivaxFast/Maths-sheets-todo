@@ -74,10 +74,13 @@ header {
 #code-boxes {
     display: flex;
     justify-content: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
 }
+/* Shrink together on narrow screens so all the boxes fit on one line */
 #code-boxes input {
-    width: 2.6rem;
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 2.6rem;
     height: 3rem;
     padding: 0;
     font-size: 1.5rem;
@@ -489,5 +492,4 @@ h2 {
     .course-row input, #course-form input { flex: 1 1 100%; }
     .course-row .delete { margin-left: auto; }
     #course-form button { flex: 1 1 100%; padding: 0.6rem; }
-    #code-boxes input { width: 2.4rem; }
 }

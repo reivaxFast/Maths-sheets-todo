@@ -373,7 +373,8 @@ function openSync() {
 
 // The code is typed into one box per digit. Typing moves on to the next box, Backspace
 // goes back, pasting fills them all, and filling the last box signs in.
-const CODE_LENGTH = 6;
+// Matches "Email OTP Length" in the Supabase project's email sign-in settings
+const CODE_LENGTH = 8;
 const codeBoxes = Array.from({ length: CODE_LENGTH }, (_, i) => {
   const box = document.createElement('input');
   box.type = 'text';
