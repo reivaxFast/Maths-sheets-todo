@@ -4,7 +4,7 @@
 // The plugins are reached through Capacitor.Plugins, so no bundler is needed.
 
 if (window.Capacitor?.isNativePlatform()) {
-  const { App, CapacitorHttp, Filesystem, FileOpener, Share } = window.Capacitor.Plugins;
+  const { App, CapacitorHttp, DocumentScanner, EmailComposer, Filesystem, FileOpener, Share } = window.Capacitor.Plugins;
 
   const safeName = name => String(name).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'file';
 
@@ -15,6 +15,30 @@ if (window.Capacitor?.isNativePlatform()) {
       bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     }
     return btoa(bin);
+  }
+
+  function base64ToArrayBuffer(base64) {
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  // Google's document scanner is a Play services module that some phones download on first use
+  const SCANNER_INSTALL = { COMPLETED: 4, FAILED: 5, CANCELED: 3 };
+  async function ensureScannerInstalled(onStatus) {
+    const { available } = await DocumentScanner.isGoogleDocumentScannerModuleAvailable();
+    if (available) return;
+    onStatus('Downloading the document scanner…');
+    await new Promise((resolve, reject) => {
+      DocumentScanner.addListener('googleDocumentScannerModuleInstallProgress', ({ state }) => {
+        if (state === SCANNER_INSTALL.COMPLETED) resolve();
+        if (state === SCANNER_INSTALL.FAILED || state === SCANNER_INSTALL.CANCELED) {
+          reject(new Error("The document scanner couldn't be downloaded. Check your connection and try again."));
+        }
+      });
+      DocumentScanner.installGoogleDocumentScannerModule().catch(reject);
+    }).finally(() => DocumentScanner.removeAllListeners());
   }
 
   // Files go in a fresh cache folder each time, so two with the same name don't clash
@@ -49,6 +73,51 @@ if (window.Capacitor?.isNativePlatform()) {
       } catch (e) {
         // Closing the share sheet without picking anything isn't an error
         return { ok: /cancel/i.test(e?.message || '') };
+      }
+    },
+    // Shares a PDF under the given name, e.g. a submission with its course's file name
+    async sharePdf(name, data) {
+      try {
+        const uri = await writeCacheFile(name, arrayBufferToBase64(data));
+        await Share.share({ title: name, files: [uri] });
+        return { ok: true };
+      } catch (e) {
+        return { ok: /cancel/i.test(e?.message || '') };
+      }
+    },
+    // Opens Google's document scanner (edge detection, cropping, cleanup) and returns the
+    // pages as one PDF. Pages can also be picked from the photo gallery.
+    async scanPdf(onStatus) {
+      try {
+        await ensureScannerInstalled(onStatus);
+        const result = await DocumentScanner.scanDocument({
+          galleryImportAllowed: true,
+          pageLimit: 50,
+          resultFormats: 'PDF',
+          scannerMode: 'FULL',
+        });
+        if (!result.pdf) return { ok: false, cancelled: true };
+        const { data } = await Filesystem.readFile({ path: result.pdf.uri });
+        return { ok: true, data: base64ToArrayBuffer(data), pages: result.pdf.pageCount };
+      } catch (e) {
+        const message = e?.message || '';
+        if (/cancel/i.test(message)) return { ok: false, cancelled: true };
+        return { ok: false, error: /couldn't be downloaded/.test(message) ? message : null };
+      }
+    },
+    // Opens the phone's email app with everything filled in. PDFs are written to the cache
+    // first and attached by path, since large files can't be passed to it directly.
+    async draftEmail({ to, subject, body, attachments }) {
+      try {
+        const files = [];
+        for (const a of attachments) {
+          const uri = await writeCacheFile(a.name, arrayBufferToBase64(a.data));
+          files.push({ type: 'absolute', path: decodeURIComponent(uri.replace(/^file:\/\//, '')) });
+        }
+        await EmailComposer.open({ to: [to], subject, body, attachments: files });
+        return { ok: true };
+      } catch {
+        return { ok: false };
       }
     },
     onImportFile() {},

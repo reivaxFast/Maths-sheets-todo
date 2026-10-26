@@ -64,6 +64,51 @@ ipcMain.handle('open-pdf', async (event, name, data) => {
     }
 });
 
+// True if .eml files are set to open in Outlook (classic, or the new Outlook app), which open
+// a draft with an X-Unsent header as a new message. With no app chosen yet, Windows would ask
+// which app to use, so that counts as no.
+async function emlOpensInOutlook() {
+    if (process.platform !== 'win32') return false;
+    const eml = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.eml';
+    const progId = await regQuery(`${eml}\\UserChoiceLatest\\ProgId`, 'ProgId')
+        || await regQuery(`${eml}\\UserChoice`, 'ProgId');
+    if (!progId) return false;
+    if (/^Outlook\./i.test(progId)) return true; // Classic Outlook
+    // Store apps have generated ids; the new Outlook names itself in its Application key
+    const appName = await regQuery(`HKCR\\${progId}\\Application`, 'ApplicationName');
+    const appId = await regQuery(`HKCR\\${progId}\\Application`, 'AppUserModelID');
+    return /outlook/i.test(`${appName} ${appId}`);
+}
+
+// Opens an email draft in the default email app.
+// - Outlook (new or classic) set to open .eml files: the draft is saved as an .eml file whose
+//   X-Unsent header makes Outlook open it as a new message, with the PDFs already attached.
+// - Otherwise: a mailto: link fills in the recipient, subject and message, and a folder
+//   holding the PDFs is opened so they can be dragged into the email.
+ipcMain.handle('open-email-draft', async (event, { to, subject, body, attachments, eml }) => {
+    try {
+        const dir = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'worksheets-email-'));
+
+        if (await emlOpensInOutlook()) {
+            const file = path.join(dir, 'Draft.eml');
+            await fs.promises.writeFile(file, String(eml));
+            if (!await shell.openPath(file)) return { ok: true, mode: 'eml' };
+        }
+
+        for (const a of attachments) {
+            const name = path.basename(String(a.name)).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'file.pdf';
+            await fs.promises.writeFile(path.join(dir, name), Buffer.from(a.data));
+        }
+        // Folder first, so the new email ends up in front of it
+        if (attachments.length) await shell.openPath(dir);
+        const query = `subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body.replace(/\r?\n/g, '\r\n'))}`;
+        await shell.openExternal(`mailto:${encodeURIComponent(to).replace(/%40/g, '@')}?${query}`);
+        return { ok: true, mode: 'mailto' };
+    } catch {
+        return { ok: false };
+    }
+});
+
 // Updates come from the GitHub releases named in package.json's build.publish.
 // Nothing downloads until the Update button is clicked.
 autoUpdater.autoDownload = false;

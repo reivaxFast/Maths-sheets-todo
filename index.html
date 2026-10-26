@@ -39,6 +39,11 @@
         <h2>Submitted <span class="count" id="count-submitted"></span></h2>
         <ul class="task-list" id="list-submitted"></ul>
     </section>
+    <div id="selection-bar" hidden>
+        <span id="selection-text"></span>
+        <button id="draft-email-btn" type="button">✉ Draft email</button>
+        <button id="clear-selection-btn" class="secondary" type="button">Clear</button>
+    </div>
     <div id="courses-modal" class="modal" hidden>
         <div class="modal-box">
             <div class="modal-head">
@@ -51,7 +56,9 @@
                 <input id="course-tutor" type="text" placeholder="Tutor name" required>
                 <input id="course-email" type="email" placeholder="Tutor email" required>
                 <button type="submit">Add course</button>
-                <textarea id="course-notes" rows="2" placeholder="Submission notes, e.g. upload to Moodle, print and hand in, file naming rules…"></textarea>
+                <textarea id="course-notes" rows="2" placeholder="Submission notes, e.g. upload to Moodle, print and hand in…"></textarea>
+                <input id="course-format" class="course-format" type="text" placeholder="Submission file name (optional), e.g. Xavier_Howard_IntroCalculus_{sheet}.pdf" title="{sheet} is replaced with the sheet number">
+                <div id="course-format-preview" class="format-preview"></div>
             </form>
         </div>
     </div>

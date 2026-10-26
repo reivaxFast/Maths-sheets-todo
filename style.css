@@ -370,6 +370,21 @@ h2 {
     background: transparent;
     border-color: transparent;
 }
+.course-row .course-format, #course-form .course-format {
+    flex: 1 1 100%;
+    font-family: Consolas, monospace;
+    font-size: 0.85rem;
+}
+.course-row .course-format:not(:focus) {
+    border-color: #33334a;
+}
+.format-preview {
+    flex: 1 1 100%;
+    margin-top: -0.25rem;
+    font-size: 0.8rem;
+    color: #888;
+}
+.format-preview:empty { display: none; }
 #course-form {
     padding-top: 1rem;
     border-top: 1px solid #33334a;
@@ -412,6 +427,11 @@ h2 {
     white-space: nowrap;
 }
 .pdf-link:hover { color: #fff; }
+.pdf-save {
+    color: #ccc;
+    border: 1px solid #44445a !important;
+}
+.pdf-save:hover { color: #fff; border-color: #7c6cf0 !important; }
 .pdf-remove {
     color: #888;
 }
@@ -504,4 +524,120 @@ h2 {
     .course-row input, #course-form input { flex: 1 1 100%; }
     .course-row .delete { margin-left: auto; }
     #course-form button { flex: 1 1 100%; padding: 0.6rem; }
+}
+
+/* Selecting tasks */
+.task-pick {
+    flex-shrink: 0;
+    width: 1.1rem;
+    height: 1.1rem;
+    margin: 0;
+    accent-color: #7c6cf0;
+    cursor: pointer;
+}
+.task.selected {
+    background: #33334f;
+    outline: 1px solid #7c6cf0;
+}
+#selection-bar {
+    position: fixed;
+    left: 50%;
+    bottom: max(1rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    transform: translateX(-50%);
+    z-index: 14;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    box-sizing: border-box;
+    width: min(860px, calc(100% - 2rem));
+    padding: 0.6rem 0.75rem 0.6rem 1rem;
+    background: #2a2a3c;
+    border: 1px solid #7c6cf0;
+    border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+#selection-bar[hidden] { display: none; }
+#selection-bar.problem { border-color: #a0606a; }
+#selection-text {
+    flex: 1;
+    font-size: 0.9rem;
+    color: #ccc;
+}
+#selection-bar button {
+    padding: 0.45rem 0.9rem;
+    font-size: 0.9rem;
+    border-radius: 6px;
+    white-space: nowrap;
+}
+#draft-email-btn {
+    background: #7c6cf0;
+    color: #fff;
+    border: none;
+    font-weight: 600;
+}
+#draft-email-btn:disabled {
+    background: #44445a;
+    color: #888;
+    cursor: not-allowed;
+}
+#clear-selection-btn {
+    background: transparent;
+    color: #ccc;
+    border: 1px solid #44445a;
+}
+/* Keeps the last task and any message clear of the selection bar */
+body.has-selection { padding-bottom: 6rem; }
+body.has-selection #message {
+    bottom: calc(max(1rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))) + 4.5rem);
+}
+
+/* Email template in Courses */
+.course-email {
+    flex: 1 1 100%;
+    font-size: 0.9rem;
+}
+.course-email summary {
+    cursor: pointer;
+    color: #b5aaff;
+    padding: 0.2rem 0;
+}
+.course-email input, .course-email textarea {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    margin-top: 0.4rem;
+    padding: 0.45rem;
+    font: inherit;
+    background: #2a2a3c !important;
+    color: #eee;
+    border: 1px solid #44445a !important;
+    border-radius: 6px;
+    resize: vertical;
+}
+.email-help {
+    margin-top: 0.35rem;
+    font-size: 0.8rem;
+    color: #888;
+}
+.email-example {
+    margin: 0.25rem 0 0;
+    padding: 0.5rem 0.65rem;
+    font: inherit;
+    font-size: 0.82rem;
+    color: #bbb;
+    white-space: pre-wrap;
+    background: #24243a;
+    border-left: 2px solid #44445a;
+    border-radius: 4px;
+}
+
+@media (max-width: 640px) {
+    .task-pick { align-self: flex-start; margin-top: 0.2rem; }
+    #selection-bar { flex-wrap: wrap; }
+    #selection-text { flex: 1 1 100%; }
+    #selection-bar button { flex: 1; }
+    body.has-selection { padding-bottom: 9rem; }
+    body.has-selection #message {
+        bottom: calc(max(1rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))) + 7rem);
+    }
 }

@@ -32,7 +32,9 @@
       "style.css",
       "icon.png",
       "!node_modules/@capacitor/**",
-      "!node_modules/@capacitor-community/**"
+      "!node_modules/@capacitor-community/**",
+      "!node_modules/@capacitor-mlkit/**",
+      "!node_modules/capacitor-email-composer/**"
     ],
     "fileAssociations": [
       {
@@ -60,12 +62,14 @@
   },
   "dependencies": {
     "@capacitor-community/file-opener": "^8.0.1",
+    "@capacitor-mlkit/document-scanner": "^8.2.1",
     "@capacitor/android": "^8.5.3",
     "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.5.3",
     "@capacitor/filesystem": "^8.1.5",
     "@capacitor/share": "^8.0.3",
     "@supabase/supabase-js": "^2.118.0",
+    "capacitor-email-composer": "^8.0.0",
     "electron-updater": "^6.8.11"
   }
 }

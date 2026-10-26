@@ -49,10 +49,11 @@ function courseOf(task) {
 // Each task can hold three PDFs. `field` is the task property holding the file name;
 // submissions are keyed by plain task id (as before), the others by "id:problem" and "id:marked".
 // Marked work can only be added once the task is submitted (`afterSubmit`).
+// `scannable` kinds get a Scan button in the Android app.
 const PDF_KINDS = {
   problem: { field: 'problemName', key: id => `${id}:problem`, icon: '📋', label: 'Problem sheet' },
-  work: { field: 'pdfName', key: id => id, icon: '📄', label: 'Submission' },
-  marked: { field: 'markedName', key: id => `${id}:marked`, icon: '✅', label: 'Marked work', afterSubmit: true },
+  work: { field: 'pdfName', key: id => id, icon: '📄', label: 'Submission', scannable: true },
+  marked: { field: 'markedName', key: id => `${id}:marked`, icon: '✅', label: 'Marked work', afterSubmit: true, scannable: true },
 };
 
 function pdfKeys(task) {
@@ -106,17 +107,54 @@ pdfInput.addEventListener('change', async () => {
     showMessage('Please choose a PDF file.', true);
     return;
   }
-  const { task, kind } = pdfTarget;
+  await storePdf(pdfTarget.task, pdfTarget.kind, file, file.name);
+});
+
+async function storePdf(task, kind, blob, name) {
   try {
-    await putPdf(kind.key(task.id), file);
+    await putPdf(kind.key(task.id), blob);
   } catch {
     showMessage("Couldn't save that PDF.", true);
-    return;
+    return false;
   }
-  task[kind.field] = file.name;
+  task[kind.field] = name;
   save();
   render();
-});
+  return true;
+}
+
+// Android only: scans paper with the camera into a PDF (see mobile.js)
+async function scanPdf(task, kind) {
+  const result = await window.files.scanPdf(status => showMessage(status));
+  if (!result.ok) {
+    if (!result.cancelled) showMessage(result.error || "Couldn't scan. Please try again.", true);
+    return;
+  }
+  const blob = new Blob([result.data], { type: 'application/pdf' });
+  if (await storePdf(task, kind, blob, scanName(task, kind))) {
+    showMessage(`Scanned ${result.pages} page${result.pages === 1 ? '' : 's'} as ${pdfName(task, kind)}`);
+  }
+}
+
+// Saves a copy under its shown name (desktop: a Save dialog), or on Android opens the share
+// sheet, e.g. to upload a submission with the course's file name
+async function savePdfCopy(key, name) {
+  const blob = await getPdf(key) || await remotePdf(key);
+  if (!blob) {
+    showMessage("That PDF couldn't be found.", true);
+    return;
+  }
+  if (window.files?.sharePdf) {
+    const result = await window.files.sharePdf(name, await blob.arrayBuffer());
+    if (!result.ok) showMessage("Couldn't share that PDF.", true);
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 
 const notesInput = document.createElement('input');
 notesInput.type = 'file';
@@ -206,6 +244,74 @@ function taskTitle(task) {
   return `${courseOf(task)?.name || 'No course'} – Sheet ${task.sheet}`;
 }
 
+// A course's file name format, e.g. "Xavier_Howard_IntroCalculus_{sheet}.pdf".
+// {sheet} or {sheet number} is replaced with the task's sheet number.
+const SHEET_PLACEHOLDER = /\{\s*sheet(?:\s*(?:number|no\.?|#))?\s*\}/gi;
+const unsafeFileChars = name => name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+
+function formatFileName(format, sheet) {
+  const name = unsafeFileChars(format.replace(SHEET_PLACEHOLDER, sheet)).trim();
+  return /\.pdf$/i.test(name) ? name : name + '.pdf';
+}
+
+// The name a PDF is shown, opened, saved and shared under. Submissions use the course's
+// format when it has one, so changing the format renames every submission in the course.
+function pdfName(task, kind) {
+  const uploaded = task[kind.field];
+  const format = courseOf(task)?.fileFormat;
+  if (uploaded && kind === PDF_KINDS.work && format && task.sheet) return formatFileName(format, task.sheet);
+  return uploaded;
+}
+
+// Email templates. Each course can set its own subject and body; these are used otherwise.
+// Tags are filled in when the email is drafted (case doesn't matter).
+const DEFAULT_EMAIL_SUBJECT = '{Course} – {SheetLabel}';
+const DEFAULT_EMAIL_BODY = 'Dear {TutorFirstName},\n\nPlease find attached my work for {SheetLabel}.\n\nBest wishes,';
+const EMAIL_TAGS = '{TutorFirstName} {TutorSurname} {TutorName} {Course} {Sheets} (e.g. "3 and 4") {SheetLabel} (e.g. "Sheets 3 and 4")';
+const TITLES = /^(dr|prof|professor|mr|mrs|ms|miss|mx|sir|dame)\.?$/i;
+
+// "Dr Jane Smith" → { first: 'Jane', surname: 'Smith' }. With only one name besides a
+// title ("Dr Smith"), both tags use it.
+function tutorNames(tutor) {
+  const words = String(tutor || '').trim().split(/\s+/).filter(Boolean);
+  const names = words.filter(w => !TITLES.test(w));
+  const use = names.length ? names : words;
+  return { first: use[0] || '', surname: use[use.length - 1] || '' };
+}
+
+// "3", "3 and 4", "3, 4 and 5"
+function joinSheets(sheets) {
+  const sorted = [...sheets].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return sorted.length < 2 ? sorted.join('') : `${sorted.slice(0, -1).join(', ')} and ${sorted.at(-1)}`;
+}
+
+function fillTemplate(template, course, sheets) {
+  const { first, surname } = tutorNames(course.tutor);
+  const values = {
+    tutorfirstname: first,
+    tutorsurname: surname,
+    tutorname: course.tutor,
+    course: course.name,
+    sheets: joinSheets(sheets),
+    sheet: joinSheets(sheets),
+    sheetlabel: `${sheets.length === 1 ? 'Sheet' : 'Sheets'} ${joinSheets(sheets)}`,
+  };
+  // Spaces are ignored and "Tutur" is read as "Tutor", so small typos in a tag still work
+  return template.replace(/\{\s*([a-z ]+?)\s*\}/gi, (tag, word) => {
+    const key = word.replace(/\s+/g, '').toLowerCase().replace(/^tutur/, 'tutor');
+    return values[key] ?? tag;
+  });
+}
+
+const emailSubject = (course, sheets) => fillTemplate(course.emailSubject || DEFAULT_EMAIL_SUBJECT, course, sheets);
+const emailBody = (course, sheets) => fillTemplate(course.emailBody || DEFAULT_EMAIL_BODY, course, sheets);
+
+// Name for a scanned PDF, before the course's format (if any) is applied
+function scanName(task, kind) {
+  const suffix = kind === PDF_KINDS.work ? '' : ` ${kind.label.toLowerCase()}`;
+  return unsafeFileChars(`${taskTitle(task)}${suffix}.pdf`);
+}
+
 function courseOptions(select, selectedId, withNew) {
   select.innerHTML = '';
   // In the add form the empty option is a prompt, and the form requires a real course
@@ -232,6 +338,20 @@ function render() {
     const li = document.createElement('li');
     li.className = 'task' + (task.status ? ` status-${task.status}` : '');
     if (dueKey(task) < nowKey() && task.status !== 'submitted') li.classList.add('overdue');
+    li.classList.toggle('selected', selected.has(task.id));
+
+    const pick = document.createElement('input');
+    pick.type = 'checkbox';
+    pick.className = 'task-pick';
+    pick.title = 'Select, e.g. to email several sheets to the tutor at once';
+    pick.checked = selected.has(task.id);
+    pick.addEventListener('change', () => {
+      if (pick.checked) selected.add(task.id);
+      else selected.delete(task.id);
+      li.classList.toggle('selected', pick.checked);
+      renderSelection();
+    });
+    li.append(pick);
 
     const info = document.createElement('div');
     info.className = 'info';
@@ -270,13 +390,23 @@ function render() {
     const pdf = document.createElement('div');
     pdf.className = 'pdf';
     for (const kind of Object.values(PDF_KINDS)) {
-      const name = task[kind.field];
+      const name = pdfName(task, kind);
       if (name) {
         const view = document.createElement('button');
         view.className = 'pdf-link';
-        view.title = `${kind.label}: ${name} (opens in your browser)`;
+        view.title = `${kind.label}: ${name}` +
+          (name !== task[kind.field] ? ` (uploaded as ${task[kind.field]})` : '');
         view.textContent = `${kind.icon} ${name}`;
         view.addEventListener('click', () => openPdf(kind.key(task.id), name));
+        pdf.append(view);
+        if (kind === PDF_KINDS.work) {
+          const copy = document.createElement('button');
+          copy.className = 'pdf-save';
+          copy.textContent = window.files?.sharePdf ? 'Share' : 'Save';
+          copy.title = window.files?.sharePdf ? `Share as ${name}` : `Save a copy as ${name}`;
+          copy.addEventListener('click', () => savePdfCopy(kind.key(task.id), name));
+          pdf.append(copy);
+        }
         const remove = document.createElement('button');
         remove.className = 'pdf-remove';
         remove.title = `Remove ${kind.label.toLowerCase()}`;
@@ -287,7 +417,7 @@ function render() {
           save();
           render();
         });
-        pdf.append(view, remove);
+        pdf.append(remove);
       } else if (!kind.afterSubmit || task.status === 'submitted') {
         const attach = document.createElement('button');
         attach.className = 'pdf-attach';
@@ -297,6 +427,14 @@ function render() {
           pdfInput.click();
         });
         pdf.append(attach);
+        if (kind.scannable && window.files?.scanPdf) {
+          const scan = document.createElement('button');
+          scan.className = 'pdf-attach pdf-scan';
+          scan.textContent = '📷 Scan';
+          scan.title = `Scan your ${kind.label.toLowerCase()} with the camera`;
+          scan.addEventListener('click', () => scanPdf(task, kind));
+          pdf.append(scan);
+        }
       }
     }
     info.append(pdf);
@@ -355,6 +493,156 @@ function render() {
 
   courseOptions(courseSelect, courseSelect.value, true);
   renderCourses();
+  renderSelection();
+}
+
+// Selecting tasks
+//
+// Ticked tasks from one course can be emailed to its tutor together, with their
+// submissions attached, using the course's email template.
+
+const selected = new Set();
+const selectionBar = document.getElementById('selection-bar');
+const selectionText = document.getElementById('selection-text');
+const draftBtn = document.getElementById('draft-email-btn');
+
+function selectedTasks() {
+  return tasks.filter(t => selected.has(t.id));
+}
+
+function renderSelection() {
+  // Drop tasks that were deleted (here or on another device)
+  for (const id of selected) if (!tasks.some(t => t.id === id)) selected.delete(id);
+  const picked = selectedTasks();
+  selectionBar.hidden = picked.length === 0;
+  document.body.classList.toggle('has-selection', picked.length > 0);
+  if (!picked.length) return;
+
+  const courseIds = new Set(picked.map(t => t.courseId));
+  const course = courseIds.size === 1 ? courseOf(picked[0]) : null;
+  let problem = '';
+  if (courseIds.size > 1) problem = 'These are from different courses. Pick sheets from one course to email them.';
+  else if (!course) problem = "These tasks don't have a course, so there's no tutor to email.";
+  else if (!course.email) problem = `${course.name} has no tutor email. Add one in Courses.`;
+
+  selectionText.textContent = problem ||
+    `${picked.length} selected · ${course.name} · to ${course.tutor}`;
+  selectionBar.classList.toggle('problem', !!problem);
+  draftBtn.disabled = !!problem;
+}
+
+document.getElementById('clear-selection-btn').addEventListener('click', () => {
+  selected.clear();
+  render();
+});
+draftBtn.addEventListener('click', () => draftEmail(selectedTasks()));
+
+// Builds the email from the course's template with each task's submission attached (under
+// the course's file name format), and opens it as a draft: in Outlook on desktop, or the
+// phone's email app on Android. Nothing is sent; that's left to you.
+async function draftEmail(picked) {
+  picked = [...picked].sort((a, b) => String(a.sheet || a.text).localeCompare(String(b.sheet || b.text), undefined, { numeric: true }));
+  const course = courseOf(picked[0]);
+  const sheets = picked.map(t => t.sheet || t.text);
+  const attachments = [];
+  const missing = [];
+  for (const task of picked) {
+    const key = PDF_KINDS.work.key(task.id);
+    const blob = task.pdfName && (await getPdf(key) || await remotePdf(key));
+    if (blob) attachments.push({ name: pdfName(task, PDF_KINDS.work), data: await blob.arrayBuffer() });
+    else missing.push(task);
+  }
+  const email = {
+    to: course.email,
+    toName: course.tutor,
+    subject: emailSubject(course, sheets),
+    body: emailBody(course, sheets),
+    attachments,
+  };
+
+  let result;
+  if (window.files?.draftEmail) {
+    result = await window.files.draftEmail(email); // Android
+  } else if (window.files?.openEmailDraft) {
+    result = await window.files.openEmailDraft({ ...email, eml: buildEmail(email) }); // Desktop
+  } else {
+    // In a plain browser (e.g. testing): download the draft
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buildEmail(email)], { type: 'message/rfc822' }));
+    a.download = 'draft.eml';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    result = { ok: true };
+  }
+  if (!result.ok) {
+    showMessage("Couldn't open your email app.", true);
+    return;
+  }
+  // The new Outlook (and most email apps) can't be handed attachments, so the PDFs are put
+  // in a folder that opens beside the email
+  const dragIn = result.mode === 'mailto' && attachments.length
+    ? ` Drag the ${attachments.length === 1 ? 'PDF' : `${attachments.length} PDFs`} from the folder that opened into it.`
+    : '';
+
+  const n = picked.length;
+  const one = missing.length === 1;
+  const note = missing.length
+    ? ` ${one ? 'Sheet' : 'Sheets'} ${joinSheets(missing.map(t => t.sheet || t.text))} ${one ? 'has' : 'have'} no submission, so nothing is attached for ${one ? 'it' : 'them'}.`
+    : '';
+  selected.clear();
+  render();
+  showMessage(`Email to ${course.tutor} drafted.${dragIn}${note}`, missing.length > 0, {
+    label: `Mark ${n === 1 ? 'as' : `${n} as`} submitted`,
+    fn: () => {
+      for (const t of picked) t.status = 'submitted';
+      save();
+      render();
+    },
+  }, 30);
+}
+
+// Email file (.eml) for desktop mail apps
+
+function wrapBase64(bytes) {
+  return bytesToBase64(bytes).replace(/.{1,76}/g, '$&\r\n');
+}
+
+// Encodes a header value so names with accents etc. survive
+function encodeHeader(text) {
+  return /^[\x20-\x7e]*$/.test(text)
+    ? text
+    : '=?UTF-8?B?' + bytesToBase64(new TextEncoder().encode(text)) + '?=';
+}
+
+function buildEmail({ to, toName, subject, body, attachments }) {
+  const boundary = '----=_worksheets_' + Date.now().toString(36);
+  const lines = [
+    // Tells Outlook to open this as an unsent draft rather than a received message
+    'X-Unsent: 1',
+    `To: "${encodeHeader(toName.replace(/"/g, ''))}" <${to}>`,
+    `Subject: ${encodeHeader(subject)}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    wrapBase64(new TextEncoder().encode(body.replace(/\r?\n/g, '\r\n'))),
+  ];
+  for (const a of attachments) {
+    const name = encodeHeader(a.name.replace(/"/g, ''));
+    lines.push(
+      `--${boundary}`,
+      `Content-Type: application/pdf; name="${name}"`,
+      `Content-Disposition: attachment; filename="${name}"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      wrapBase64(new Uint8Array(a.data)),
+    );
+  }
+  lines.push(`--${boundary}--`, '');
+  return lines.join('\r\n');
 }
 
 const UNDO_SECONDS = 8;
@@ -477,6 +765,7 @@ courseForm.addEventListener('submit', e => {
     tutor: document.getElementById('course-tutor').value.trim(),
     email: document.getElementById('course-email').value.trim(),
     notes: document.getElementById('course-notes').value.trim(),
+    fileFormat: document.getElementById('course-format').value.trim(),
   };
   courses.push(course);
   save();
@@ -535,6 +824,23 @@ function renderCourses() {
       render();
     });
 
+    const format = document.createElement('input');
+    format.type = 'text';
+    format.className = 'course-format';
+    format.placeholder = 'Submission file name (optional), e.g. Xavier_Howard_IntroCalculus_{sheet}.pdf';
+    format.title = '{sheet} is replaced with the sheet number';
+    format.value = course.fileFormat || '';
+    const preview = document.createElement('div');
+    preview.className = 'format-preview';
+    const showPreview = () => (preview.textContent = formatPreview(format.value));
+    showPreview();
+    format.addEventListener('input', showPreview);
+    format.addEventListener('change', () => {
+      course.fileFormat = format.value.trim();
+      save();
+      render();
+    });
+
     const files = document.createElement('div');
     files.className = 'pdf course-files';
     for (const file of course.files || []) {
@@ -587,10 +893,61 @@ function renderCourses() {
       save();
       render();
     });
-    li.append(del, notes, files);
+    const email = document.createElement('details');
+    email.className = 'course-email';
+    const summary = document.createElement('summary');
+    summary.textContent = course.emailSubject || course.emailBody ? 'Email (customised)' : 'Email';
+    const subject = document.createElement('input');
+    subject.type = 'text';
+    subject.placeholder = DEFAULT_EMAIL_SUBJECT;
+    subject.value = course.emailSubject || '';
+    subject.title = 'Subject. Leave empty for the default shown in grey.';
+    const body = document.createElement('textarea');
+    body.rows = 6;
+    body.placeholder = DEFAULT_EMAIL_BODY;
+    body.value = course.emailBody || '';
+    body.title = 'Message. Leave empty for the default shown in grey.';
+    const help = document.createElement('div');
+    help.className = 'email-help';
+    help.textContent = `Tags: ${EMAIL_TAGS}`;
+    const example = document.createElement('pre');
+    example.className = 'email-example';
+    const showExample = () => {
+      const draft = { ...course, emailSubject: subject.value.trim(), emailBody: body.value.trim() };
+      example.textContent = `To: ${course.email}\nSubject: ${emailSubject(draft, ['3', '4'])}\n\n${emailBody(draft, ['3', '4'])}`;
+    };
+    showExample();
+    for (const field of [subject, body]) {
+      field.addEventListener('input', showExample);
+      field.addEventListener('change', () => {
+        course.emailSubject = subject.value.trim();
+        course.emailBody = body.value.trim();
+        save();
+        summary.textContent = course.emailSubject || course.emailBody ? 'Email (customised)' : 'Email';
+      });
+    }
+    const exampleLabel = document.createElement('div');
+    exampleLabel.className = 'email-help';
+    exampleLabel.textContent = 'Example for sheets 3 and 4:';
+    email.append(summary, subject, body, help, exampleLabel, example);
+
+    li.append(del, notes, format, preview, email, files);
     courseList.append(li);
   }
 }
+
+// Shows what a format gives for sheet 3, so mistakes are easy to spot while typing
+function formatPreview(format) {
+  if (!format.trim()) return '';
+  SHEET_PLACEHOLDER.lastIndex = 0;
+  if (!SHEET_PLACEHOLDER.test(format)) return 'Add {sheet} where the sheet number goes.';
+  return `Sheet 3 is saved as ${formatFileName(format.trim(), '3')}`;
+}
+
+const newFormat = document.getElementById('course-format');
+const newFormatPreview = document.getElementById('course-format-preview');
+newFormat.addEventListener('input', () => (newFormatPreview.textContent = formatPreview(newFormat.value)));
+courseForm.addEventListener('reset', () => (newFormatPreview.textContent = ''));
 
 // Messages
 
@@ -598,7 +955,7 @@ const message = document.getElementById('message');
 let messageTimer;
 
 // action is an optional { label, fn } shown as a button, e.g. Undo
-function showMessage(text, isError, action) {
+function showMessage(text, isError, action, seconds) {
   message.innerHTML = '';
   const span = document.createElement('span');
   span.textContent = text;
@@ -615,7 +972,7 @@ function showMessage(text, isError, action) {
   message.className = isError ? 'error' : '';
   message.hidden = false;
   clearTimeout(messageTimer);
-  messageTimer = setTimeout(() => (message.hidden = true), action ? UNDO_SECONDS * 1000 : 4000);
+  messageTimer = setTimeout(() => (message.hidden = true), (seconds || (action ? UNDO_SECONDS : 4)) * 1000);
 }
 
 // Export / import
@@ -732,6 +1089,9 @@ async function importText(text) {
       tutor: String(c.tutor || ''),
       email: String(c.email || ''),
       notes: String(c.notes || ''),
+      ...(typeof c.fileFormat === 'string' && c.fileFormat && { fileFormat: c.fileFormat }),
+      ...(typeof c.emailSubject === 'string' && c.emailSubject && { emailSubject: c.emailSubject }),
+      ...(typeof c.emailBody === 'string' && c.emailBody && { emailBody: c.emailBody }),
       ...(isDate(c.lastDue) && { lastDue: c.lastDue }),
       ...(isTime(c.lastTime) && { lastTime: c.lastTime }),
     });
