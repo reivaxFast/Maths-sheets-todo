@@ -281,20 +281,36 @@ function tutorNames(tutor) {
 
 // "3", "3 and 4", "3, 4 and 5"
 function joinSheets(sheets) {
-  const sorted = [...sheets].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  return sorted.length < 2 ? sorted.join('') : `${sorted.slice(0, -1).join(', ')} and ${sorted.at(-1)}`;
+  return joinList([...sheets].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })));
 }
 
-function fillTemplate(template, course, sheets) {
+// "A", "A and B", "A, B and C"
+function joinList(items) {
+  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+}
+
+const sheetLabel = sheets => `${sheets.length === 1 ? 'Sheet' : 'Sheets'} ${joinSheets(sheets)}`;
+
+// The sheets an email is about, as [{ course, sheets }], one entry per course.
+// One course: "Sheets 3 and 4". Several: "Intro Calculus Sheets 3 and 4, Linear Algebra Sheet 2".
+function describeSheets(groups, withCourses = groups.length > 1) {
+  if (!withCourses) return sheetLabel(groups[0].sheets);
+  return groups.map(g => `${g.course.name} ${sheetLabel(g.sheets)}`).join(', ');
+}
+
+// `course` is the course whose template and tutor names are used; `groups` is as above
+function fillTemplate(template, course, groups) {
   const { first, surname } = tutorNames(course.tutor);
+  const single = groups.length === 1;
   const values = {
     tutorfirstname: first,
     tutorsurname: surname,
     tutorname: course.tutor,
-    course: course.name,
-    sheets: joinSheets(sheets),
-    sheet: joinSheets(sheets),
-    sheetlabel: `${sheets.length === 1 ? 'Sheet' : 'Sheets'} ${joinSheets(sheets)}`,
+    course: joinList(groups.map(g => g.course.name)),
+    // With several courses each sheet number needs its course, so these match {SheetLabel}
+    sheets: single ? joinSheets(groups[0].sheets) : describeSheets(groups),
+    sheet: single ? joinSheets(groups[0].sheets) : describeSheets(groups),
+    sheetlabel: describeSheets(groups),
   };
   // Spaces are ignored and "Tutur" is read as "Tutor", so small typos in a tag still work
   return template.replace(/\{\s*([a-z ]+?)\s*\}/gi, (tag, word) => {
@@ -303,8 +319,8 @@ function fillTemplate(template, course, sheets) {
   });
 }
 
-const emailSubject = (course, sheets) => fillTemplate(course.emailSubject || DEFAULT_EMAIL_SUBJECT, course, sheets);
-const emailBody = (course, sheets) => fillTemplate(course.emailBody || DEFAULT_EMAIL_BODY, course, sheets);
+const emailSubject = (course, groups) => fillTemplate(course.emailSubject || DEFAULT_EMAIL_SUBJECT, course, groups);
+const emailBody = (course, groups) => fillTemplate(course.emailBody || DEFAULT_EMAIL_BODY, course, groups);
 
 // Name for a scanned PDF, before the course's format (if any) is applied
 function scanName(task, kind) {
@@ -518,17 +534,41 @@ function renderSelection() {
   document.body.classList.toggle('has-selection', picked.length > 0);
   if (!picked.length) return;
 
-  const courseIds = new Set(picked.map(t => t.courseId));
-  const course = courseIds.size === 1 ? courseOf(picked[0]) : null;
-  let problem = '';
-  if (courseIds.size > 1) problem = 'These are from different courses. Pick sheets from one course to email them.';
-  else if (!course) problem = "These tasks don't have a course, so there's no tutor to email.";
-  else if (!course.email) problem = `${course.name} has no tutor email. Add one in Courses.`;
+  const plan = planEmail(picked);
+  selectionText.textContent = plan.problem ||
+    `${picked.length} selected · ${joinList(plan.groups.map(g => g.course.name))} · to ${plan.course.tutor}`;
+  selectionBar.classList.toggle('problem', !!plan.problem);
+  draftBtn.disabled = !!plan.problem;
+}
 
-  selectionText.textContent = problem ||
-    `${picked.length} selected · ${course.name} · to ${course.tutor}`;
-  selectionBar.classList.toggle('problem', !!problem);
-  draftBtn.disabled = !!problem;
+// Works out whether ticked tasks can go in one email: they must all have courses with the same
+// tutor email (one course, or several sharing a tutor). Returns { problem } if not, otherwise
+// { course, groups }: the course whose template is used (the one with the most ticked sheets,
+// or the first if tied) and the tasks grouped by course, that course first.
+function planEmail(picked) {
+  if (picked.some(t => !courseOf(t))) {
+    return { problem: "Some of these tasks don't have a course, so there's no tutor to email." };
+  }
+  const byCourse = new Map();
+  for (const t of picked) {
+    const course = courseOf(t);
+    if (!byCourse.has(course)) byCourse.set(course, []);
+    byCourse.get(course).push(t);
+  }
+  const noEmail = [...byCourse.keys()].find(c => !c.email);
+  if (noEmail) return { problem: `${noEmail.name} has no tutor email. Add one in Courses.` };
+  if (new Set([...byCourse.keys()].map(c => c.email.trim().toLowerCase())).size > 1) {
+    return { problem: 'These go to different tutors. Pick sheets for one tutor to email them together.' };
+  }
+
+  const bySheet = (a, b) => String(a.sheet || a.text).localeCompare(String(b.sheet || b.text), undefined, { numeric: true });
+  // Map keeps first-ticked order, and sort is stable, so ties keep the first course first
+  const groups = [...byCourse].map(([course, list]) => ({
+    course,
+    tasks: list.sort(bySheet),
+    sheets: list.map(t => t.sheet || t.text),
+  })).sort((a, b) => b.tasks.length - a.tasks.length);
+  return { course: groups[0].course, groups };
 }
 
 document.getElementById('clear-selection-btn').addEventListener('click', () => {
@@ -541,9 +581,10 @@ draftBtn.addEventListener('click', () => draftEmail(selectedTasks()));
 // the course's file name format), and opens it as a draft: in Outlook on desktop, or the
 // phone's email app on Android. Nothing is sent; that's left to you.
 async function draftEmail(picked) {
-  picked = [...picked].sort((a, b) => String(a.sheet || a.text).localeCompare(String(b.sheet || b.text), undefined, { numeric: true }));
-  const course = courseOf(picked[0]);
-  const sheets = picked.map(t => t.sheet || t.text);
+  const { course, groups, problem } = planEmail(picked);
+  if (problem) return;
+  // Attached course by course, in sheet order
+  picked = groups.flatMap(g => g.tasks);
   const attachments = [];
   const missing = [];
   for (const task of picked) {
@@ -555,8 +596,8 @@ async function draftEmail(picked) {
   const email = {
     to: course.email,
     toName: course.tutor,
-    subject: emailSubject(course, sheets),
-    body: emailBody(course, sheets),
+    subject: emailSubject(course, groups),
+    body: emailBody(course, groups),
     attachments,
   };
 
@@ -586,8 +627,13 @@ async function draftEmail(picked) {
 
   const n = picked.length;
   const one = missing.length === 1;
+  // Described like the email's sheets, so with several courses each sheet names its course
+  const missingGroups = groups
+    .map(g => ({ course: g.course, sheets: g.tasks.filter(t => missing.includes(t)).map(t => t.sheet || t.text) }))
+    .filter(g => g.sheets.length);
+  const missingText = missing.length ? describeSheets(missingGroups, groups.length > 1) : '';
   const note = missing.length
-    ? ` ${one ? 'Sheet' : 'Sheets'} ${joinSheets(missing.map(t => t.sheet || t.text))} ${one ? 'has' : 'have'} no submission, so nothing is attached for ${one ? 'it' : 'them'}.`
+    ? ` ${missingText} ${one ? 'has' : 'have'} no submission, so nothing is attached for ${one ? 'it' : 'them'}.`
     : '';
   selected.clear();
   render();
@@ -914,7 +960,8 @@ function renderCourses() {
     example.className = 'email-example';
     const showExample = () => {
       const draft = { ...course, emailSubject: subject.value.trim(), emailBody: body.value.trim() };
-      example.textContent = `To: ${course.email}\nSubject: ${emailSubject(draft, ['3', '4'])}\n\n${emailBody(draft, ['3', '4'])}`;
+      const groups = [{ course: draft, sheets: ['3', '4'] }];
+      example.textContent = `To: ${course.email}\nSubject: ${emailSubject(draft, groups)}\n\n${emailBody(draft, groups)}`;
     };
     showExample();
     for (const field of [subject, body]) {
