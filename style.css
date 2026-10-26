@@ -33,7 +33,19 @@ header {
     border-color: #7c6cf0;
     color: #fff;
 }
-#sync-btn[hidden] { display: none; }
+#sync-btn[hidden], #update-btn[hidden] { display: none; }
+.actions #update-btn {
+    background: #7c6cf0;
+    border-color: #7c6cf0;
+    color: #fff;
+}
+.actions #update-btn:hover { background: #8d7ef5; }
+.actions #update-btn:disabled { opacity: 0.75; cursor: default; }
+
+/* The course's notes, shown on each of its tasks */
+.task-course-notes .pdf-link {
+    color: #9fc8ff;
+}
 /* A coloured dot shows the sync state once signed in */
 #sync-btn.synced::before, #sync-btn.syncing::before, #sync-btn.offline::before {
     content: '';

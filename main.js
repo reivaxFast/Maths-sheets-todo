@@ -1,4 +1,5 @@
 const { app, BrowserWindow, Menu, ipcMain, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const { execFile, spawn } = require('child_process');
@@ -58,6 +59,33 @@ ipcMain.handle('open-pdf', async (event, name, data) => {
     } catch {
         return { ok: false };
     }
+});
+
+// Updates come from the GitHub releases named in package.json's build.publish.
+// Nothing downloads until the Update button is clicked.
+autoUpdater.autoDownload = false;
+autoUpdater.on('download-progress', p => win?.webContents.send('update-progress', Math.round(p.percent)));
+
+// Returns the newer version's number, or null. Only the installed app updates: `npm start` runs from source.
+ipcMain.handle('check-update', async () => {
+  if (!app.isPackaged) return null;
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return result?.isUpdateAvailable ? result.updateInfo.version : null;
+  } catch {
+    return null; // Offline, or no release to compare with
+  }
+});
+
+// Downloads the new installer, then closes the app, installs it quietly and reopens
+ipcMain.handle('install-update', async () => {
+  try {
+    await autoUpdater.downloadUpdate();
+    autoUpdater.quitAndInstall(true, true);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
 });
 
 // Opening a .todo file (e.g. double-clicking it) passes its path on the command line

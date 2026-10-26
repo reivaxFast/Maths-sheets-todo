@@ -299,6 +299,22 @@ function render() {
     }
     info.append(pdf);
 
+    // The course's notes, so they can be opened straight from the task (added in Courses)
+    const taskCourse = courseOf(task);
+    if (taskCourse?.files?.length) {
+      const notesRow = document.createElement('div');
+      notesRow.className = 'pdf task-course-notes';
+      for (const file of taskCourse.files) {
+        const view = document.createElement('button');
+        view.className = 'pdf-link';
+        view.title = `Course notes: ${file.name}`;
+        view.textContent = `📚 ${file.name}`;
+        view.addEventListener('click', () => openPdf(noteKey(taskCourse, file), file.name));
+        notesRow.append(view);
+      }
+      info.append(notesRow);
+    }
+
     const options = document.createElement('div');
     options.className = 'options';
     for (const s of STATUSES) {
@@ -772,7 +788,45 @@ async function importText(text) {
   showMessage(parts.length ? `Imported ${parts.join(', ')}.` : 'Nothing new to import.');
 }
 
+// Updates
+//
+// window.updates comes from preload.js (desktop) or mobile.js (Android). The Update button
+// only appears once a newer release is found on GitHub.
+
+const UPDATE_CHECK_HOURS = 6;
+const updateBtn = document.getElementById('update-btn');
+let updateVersion = null;
+
+function showUpdateButton() {
+  updateBtn.textContent = `Update to ${updateVersion}`;
+  updateBtn.disabled = false;
+  updateBtn.hidden = false;
+}
+
+async function checkForUpdate() {
+  if (!window.updates || updateVersion) return;
+  updateVersion = await window.updates.check();
+  if (updateVersion) showUpdateButton();
+}
+
+updateBtn.addEventListener('click', async () => {
+  updateBtn.disabled = true;
+  updateBtn.textContent = 'Downloading…';
+  const result = await window.updates.install(updateVersion);
+  if (!result.ok) showMessage("Couldn't download the update. Check your connection and try again.", true);
+  // On desktop the app closes to install. On Android the installer opens, and the button
+  // comes back in case it was cancelled.
+  showUpdateButton();
+});
+
+window.updates?.onProgress(percent => {
+  if (updateBtn.disabled) updateBtn.textContent = `Downloading… ${percent}%`;
+});
+window.addEventListener('online', checkForUpdate);
+setInterval(checkForUpdate, UPDATE_CHECK_HOURS * 60 * 60 * 1000);
+
 dueInput.value = today();
 render();
 cleanUpPdfs();
 startCloud();
+checkForUpdate();
