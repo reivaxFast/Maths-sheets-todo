@@ -26,8 +26,11 @@ function splitCommand(command) {
 // Opens a URL in the user's default web browser, read from Windows' http handler
 async function openInBrowser(url) {
     if (process.platform === 'win32') {
-        const progId = await regQuery(
-            'HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice', 'ProgId');
+        // Newer Windows 11 keeps the current choice under UserChoiceLatest\ProgId and can leave
+        // an out-of-date one (often Edge) in UserChoice, so the newer key is checked first
+        const http = 'HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http';
+        const progId = await regQuery(`${http}\\UserChoiceLatest\\ProgId`, 'ProgId')
+            || await regQuery(`${http}\\UserChoice`, 'ProgId');
         const command = progId && await regQuery(`HKCR\\${progId}\\shell\\open\\command`);
         if (command) {
             const [exe, ...args] = splitCommand(command);

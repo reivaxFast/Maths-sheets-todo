@@ -46,11 +46,13 @@ function courseOf(task) {
   return courses.find(c => c.id === task.courseId) || null;
 }
 
-// Each task can hold two PDFs. `field` is the task property holding the file name;
-// submissions are keyed by plain task id (as before), problem sheets by "id:problem".
+// Each task can hold three PDFs. `field` is the task property holding the file name;
+// submissions are keyed by plain task id (as before), the others by "id:problem" and "id:marked".
+// Marked work can only be added once the task is submitted (`afterSubmit`).
 const PDF_KINDS = {
   problem: { field: 'problemName', key: id => `${id}:problem`, icon: '📋', label: 'Problem sheet' },
   work: { field: 'pdfName', key: id => id, icon: '📄', label: 'Submission' },
+  marked: { field: 'markedName', key: id => `${id}:marked`, icon: '✅', label: 'Marked work', afterSubmit: true },
 };
 
 function pdfKeys(task) {
@@ -286,7 +288,7 @@ function render() {
           render();
         });
         pdf.append(view, remove);
-      } else {
+      } else if (!kind.afterSubmit || task.status === 'submitted') {
         const attach = document.createElement('button');
         attach.className = 'pdf-attach';
         attach.textContent = `+ ${kind.label}`;
@@ -664,8 +666,8 @@ document.getElementById('export-btn').addEventListener('click', async () => {
     exportedAt: new Date().toISOString(),
     // Course notes aren't exported, so their file lists are left out
     courses: courses.map(({ files, ...c }) => c),
-    // Submission file names are left out, since the PDFs themselves aren't exported
-    tasks: tasks.map(({ pdfName, ...t }) => t),
+    // Submission and marked work file names are left out, since those PDFs aren't exported
+    tasks: tasks.map(({ pdfName, markedName, ...t }) => t),
     problemSheets,
   };
   const name = `tasks-${today()}.todo`;
