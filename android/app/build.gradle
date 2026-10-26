@@ -7,8 +7,9 @@ android {
         applicationId "com.xavierhoward.todo"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // versionCode must go up by one for every release; versionName matches package.json
+        versionCode 2
+        versionName "1.2.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +17,24 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Release builds are signed with the key described in android/keystore.properties.
+    // That file and the key itself are kept out of git; see keystore.properties.example.
+    def keystoreFile = rootProject.file('keystore.properties')
+    signingConfigs {
+        release {
+            if (keystoreFile.exists()) {
+                def keystore = new Properties()
+                keystoreFile.withInputStream { keystore.load(it) }
+                storeFile file(keystore['storeFile'])
+                storePassword keystore['storePassword']
+                keyAlias keystore['keyAlias']
+                keyPassword keystore['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
+            if (keystoreFile.exists()) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
