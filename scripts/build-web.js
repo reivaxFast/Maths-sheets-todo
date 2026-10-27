@@ -18,8 +18,9 @@ const files = [
   'mobile.js',
   'web.js',
   'icon.png',
-  // Kept at the same path, since index.html loads it from there
+  // Kept at the same paths, since the app loads them from there
   'node_modules/@supabase/supabase-js/dist/umd/supabase.js',
+  'node_modules/pdf-lib/dist/pdf-lib.min.js', // For "Draft as combined"
   // Website only: install details, icons and the offline service worker
   'manifest.webmanifest',
   'sw.js',

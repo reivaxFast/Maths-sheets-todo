@@ -580,6 +580,14 @@ h2 {
     color: #888;
     cursor: not-allowed;
 }
+#draft-combined-btn {
+    background: transparent;
+    color: #b5aaff;
+    border: 1px solid #7c6cf0;
+    font-weight: 600;
+}
+#draft-combined-btn[hidden] { display: none; }
+#draft-combined-btn:disabled { opacity: 0.6; cursor: wait; }
 #clear-selection-btn {
     background: transparent;
     color: #ccc;

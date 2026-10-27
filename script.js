@@ -298,8 +298,10 @@ function describeSheets(groups, withCourses = groups.length > 1) {
   return groups.map(g => `${g.course.name} ${sheetLabel(g.sheets)}`).join(', ');
 }
 
-// `course` is the course whose template and tutor names are used; `groups` is as above
-function fillTemplate(template, course, groups) {
+// `course` is the course whose template and tutor names are used; `groups` is as above.
+// `combined` (one course, sent as one merged PDF) lists the numbers plainly instead:
+// {Sheets} "1 2" and {Sheet} "1_2", to match how such courses name combined work.
+function fillTemplate(template, course, groups, combined = false) {
   const { first, surname } = tutorNames(course.tutor);
   const single = groups.length === 1;
   const values = {
@@ -312,6 +314,10 @@ function fillTemplate(template, course, groups) {
     sheet: single ? joinSheets(groups[0].sheets) : describeSheets(groups),
     sheetlabel: describeSheets(groups),
   };
+  if (combined && single) {
+    values.sheets = groups[0].sheets.join(' ');
+    values.sheet = groups[0].sheets.join('_');
+  }
   // Spaces are ignored and "Tutur" is read as "Tutor", so small typos in a tag still work
   return template.replace(/\{\s*([a-z ]+?)\s*\}/gi, (tag, word) => {
     const key = word.replace(/\s+/g, '').toLowerCase().replace(/^tutur/, 'tutor');
@@ -319,8 +325,42 @@ function fillTemplate(template, course, groups) {
   });
 }
 
-const emailSubject = (course, groups) => fillTemplate(course.emailSubject || DEFAULT_EMAIL_SUBJECT, course, groups);
-const emailBody = (course, groups) => fillTemplate(course.emailBody || DEFAULT_EMAIL_BODY, course, groups);
+const emailSubject = (course, groups, combined) =>
+  fillTemplate(course.emailSubject || DEFAULT_EMAIL_SUBJECT, course, groups, combined);
+const emailBody = (course, groups, combined) =>
+  fillTemplate(course.emailBody || DEFAULT_EMAIL_BODY, course, groups, combined);
+
+// Name for several sheets merged into one PDF: the course's format with {sheet} as "1_2"
+function combinedFileName(course, sheets) {
+  const numbers = sheets.join('_');
+  return course.fileFormat
+    ? formatFileName(course.fileFormat, numbers)
+    : unsafeFileChars(`${course.name} Sheets ${numbers}.pdf`);
+}
+
+// Merges PDFs (Blobs) into one, in order. pdf-lib is only loaded the first time.
+let pdfLibLoaded = null;
+async function mergePdfs(blobs) {
+  pdfLibLoaded ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'node_modules/pdf-lib/dist/pdf-lib.min.js';
+    s.onload = resolve;
+    s.onerror = () => {
+      pdfLibLoaded = null;
+      reject(new Error('pdf-lib failed to load'));
+    };
+    document.head.append(s);
+  });
+  await pdfLibLoaded;
+  const { PDFDocument } = window.PDFLib;
+  const merged = await PDFDocument.create();
+  for (const blob of blobs) {
+    const doc = await PDFDocument.load(await blob.arrayBuffer(), { ignoreEncryption: true });
+    for (const page of await merged.copyPages(doc, doc.getPageIndices())) merged.addPage(page);
+  }
+  const bytes = await merged.save();
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
 
 // Name for a scanned PDF, before the course's format (if any) is applied
 function scanName(task, kind) {
@@ -521,6 +561,7 @@ const selected = new Set();
 const selectionBar = document.getElementById('selection-bar');
 const selectionText = document.getElementById('selection-text');
 const draftBtn = document.getElementById('draft-email-btn');
+const combinedBtn = document.getElementById('draft-combined-btn');
 
 function selectedTasks() {
   return tasks.filter(t => selected.has(t.id));
@@ -539,6 +580,8 @@ function renderSelection() {
     `${picked.length} selected · ${joinList(plan.groups.map(g => g.course.name))} · to ${plan.course.tutor}`;
   selectionBar.classList.toggle('problem', !!plan.problem);
   draftBtn.disabled = !!plan.problem;
+  // Merging needs one course, since the merged PDF is named by that course's format
+  combinedBtn.hidden = !!plan.problem || picked.length < 2 || plan.groups.length > 1;
 }
 
 // Works out whether ticked tasks can go in one email: they must all have courses with the same
@@ -576,28 +619,60 @@ document.getElementById('clear-selection-btn').addEventListener('click', () => {
   render();
 });
 draftBtn.addEventListener('click', () => draftEmail(selectedTasks()));
+combinedBtn.addEventListener('click', () => draftEmail(selectedTasks(), true));
 
 // Builds the email from the course's template with each task's submission attached (under
 // the course's file name format), and opens it as a draft: in Outlook on desktop, or the
 // phone's email app on Android. Nothing is sent; that's left to you.
-async function draftEmail(picked) {
+// `combined`: the submissions are merged into one PDF, named by the course's format with
+// {sheet} as e.g. "1_2", and the template's {Sheets} becomes "1 2" (one course only).
+async function draftEmail(picked, combined = false) {
   const { course, groups, problem } = planEmail(picked);
-  if (problem) return;
+  if (problem || (combined && groups.length > 1)) return;
   // Attached course by course, in sheet order
   picked = groups.flatMap(g => g.tasks);
-  const attachments = [];
+  const blobs = [];
   const missing = [];
   for (const task of picked) {
     const key = PDF_KINDS.work.key(task.id);
     const blob = task.pdfName && (await getPdf(key) || await remotePdf(key));
-    if (blob) attachments.push({ name: pdfName(task, PDF_KINDS.work), data: await blob.arrayBuffer() });
+    if (blob) blobs.push({ task, blob });
     else missing.push(task);
   }
+
+  let attachments;
+  if (combined) {
+    // A merged PDF named for every sheet must contain every sheet
+    if (missing.length) {
+      const one = missing.length === 1;
+      showMessage(`${sheetLabel(missing.map(t => t.sheet || t.text))} ${one ? 'has' : 'have'} no submission, ` +
+        'so the sheets can\'t be combined yet.', true);
+      return;
+    }
+    combinedBtn.disabled = true;
+    combinedBtn.textContent = 'Combining…';
+    try {
+      attachments = [{
+        name: combinedFileName(course, groups[0].sheets),
+        data: await mergePdfs(blobs.map(b => b.blob)),
+      }];
+    } catch {
+      showMessage("Couldn't combine the PDFs. One of them may be damaged or password-protected.", true);
+      return;
+    } finally {
+      combinedBtn.disabled = false;
+      combinedBtn.textContent = '✉ Draft as combined';
+    }
+  } else {
+    attachments = await Promise.all(blobs.map(async ({ task, blob }) =>
+      ({ name: pdfName(task, PDF_KINDS.work), data: await blob.arrayBuffer() })));
+  }
+
   const email = {
     to: course.email,
     toName: course.tutor,
-    subject: emailSubject(course, groups),
-    body: emailBody(course, groups),
+    subject: emailSubject(course, groups, combined),
+    body: emailBody(course, groups, combined),
     attachments,
   };
 
@@ -998,7 +1073,8 @@ function formatPreview(format) {
   if (!format.trim()) return '';
   SHEET_PLACEHOLDER.lastIndex = 0;
   if (!SHEET_PLACEHOLDER.test(format)) return 'Add {sheet} where the sheet number goes.';
-  return `Sheet 3 is saved as ${formatFileName(format.trim(), '3')}`;
+  return `Sheet 3 is saved as ${formatFileName(format.trim(), '3')}; ` +
+    `sheets 3 and 4 combined as ${formatFileName(format.trim(), '3_4')}`;
 }
 
 const newFormat = document.getElementById('course-format');
