@@ -74,6 +74,37 @@ if (!window.files && !window.Capacitor?.isNativePlatform()) {
     };
   }
 
+  // Phones (touch screen with a camera API) get a Scan button. The scanner and OpenCV (about
+  // 11 MB) only download the first time it's used, then the service worker keeps them.
+  const isPhone = matchMedia('(pointer: coarse)').matches && !!navigator.mediaDevices?.getUserMedia;
+  if (isPhone) {
+    const loadScript = src => new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.append(s);
+    });
+    let scannerLoaded = null;
+
+    window.files.scanPdf = async onStatus => {
+      try {
+        if (!window.WebScanner) {
+          onStatus('Loading the scanner… (the first time takes a little while)');
+          scannerLoaded ||= Promise.all([
+            loadScript('node_modules/@techstark/opencv-js/dist/opencv.js'),
+            loadScript('scanner.js'),
+          ]);
+          await scannerLoaded;
+        }
+        return await window.WebScanner.scan();
+      } catch {
+        scannerLoaded = null;
+        return { ok: false, error: "The scanner couldn't load. Check your connection and try again." };
+      }
+    };
+  }
+
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }

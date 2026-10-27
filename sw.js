@@ -4,7 +4,8 @@
 // version appears on the next launch after it's published. Sync requests (Supabase) and
 // anything else from other sites always go to the network.
 
-const CACHE = 'worksheets-v1';
+// Changing the name clears the old cache, e.g. after updating a library in node_modules
+const CACHE = 'worksheets-v2';
 const APP_FILES = [
   './',
   'index.html',
@@ -34,7 +35,21 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   const { request } = event;
-  if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) return;
+  const url = new URL(request.url);
+  if (request.method !== 'GET' || url.origin !== self.location.origin) return;
+
+  // Libraries (e.g. the 11 MB OpenCV used by the scanner) are kept once downloaded rather
+  // than fetched again in the background on every launch
+  if (url.pathname.includes('/node_modules/')) {
+    event.respondWith(caches.open(CACHE).then(async cache => {
+      const cached = await cache.match(request);
+      if (cached) return cached;
+      const response = await fetch(request);
+      if (response.ok) cache.put(request, response.clone());
+      return response;
+    }));
+    return;
+  }
 
   const fresh = caches.open(CACHE).then(cache => fetch(request).then(response => {
     if (response.ok) cache.put(request, response.clone());

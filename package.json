@@ -16,7 +16,7 @@
     "start": "electron .",
     "dist": "electron-builder --win --publish never",
     "build:web": "node scripts/build-web.js",
-    "android": "npm run build:web && cap sync android"
+    "android": "node scripts/build-web.js --android && cap sync android"
   },
   "build": {
     "appId": "com.xavierhoward.todo",
@@ -35,7 +35,8 @@
       "!node_modules/@capacitor/**",
       "!node_modules/@capacitor-community/**",
       "!node_modules/@capacitor-mlkit/**",
-      "!node_modules/capacitor-email-composer/**"
+      "!node_modules/capacitor-email-composer/**",
+      "!node_modules/@techstark/**"
     ],
     "fileAssociations": [
       {
@@ -70,6 +71,7 @@
     "@capacitor/filesystem": "^8.1.5",
     "@capacitor/share": "^8.0.3",
     "@supabase/supabase-js": "^2.118.0",
+    "@techstark/opencv-js": "4.12.0-release.1",
     "capacitor-email-composer": "^8.0.0",
     "electron-updater": "^6.8.11"
   }
