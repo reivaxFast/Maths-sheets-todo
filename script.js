@@ -603,7 +603,7 @@ async function draftEmail(picked) {
 
   let result;
   if (window.files?.draftEmail) {
-    result = await window.files.draftEmail(email); // Android
+    result = await window.files.draftEmail({ ...email, eml: buildEmail(email) }); // Android, website
   } else if (window.files?.openEmailDraft) {
     result = await window.files.openEmailDraft({ ...email, eml: buildEmail(email) }); // Desktop
   } else {
@@ -619,11 +619,21 @@ async function draftEmail(picked) {
     showMessage("Couldn't open your email app.", true);
     return;
   }
-  // The new Outlook (and most email apps) can't be handed attachments, so the PDFs are put
-  // in a folder that opens beside the email
-  const dragIn = result.mode === 'mailto' && attachments.length
-    ? ` Drag the ${attachments.length === 1 ? 'PDF' : `${attachments.length} PDFs`} from the folder that opened into it.`
-    : '';
+  if (result.mode === 'cancelled') return; // Share sheet closed: keep the selection
+
+  // What's left to do, which depends on how the draft was opened
+  const pdfs = attachments.length === 1 ? 'PDF' : `${attachments.length} PDFs`;
+  let howTo = '';
+  if (result.mode === 'mailto' && attachments.length) {
+    // Desktop app with an email app that can't be handed attachments (folder opened beside it)
+    howTo = ` Drag the ${pdfs} from the folder that opened into it.`;
+  } else if (result.mode === 'share') {
+    howTo = result.copied
+      ? " Pick your email app, then paste the tutor's address (it's copied) into To."
+      : ` Pick your email app, and send it to ${result.to}.`;
+  } else if (result.mode === 'download') {
+    howTo = ` Open the downloaded email file: Outlook opens it as a new email with the ${pdfs} attached.`;
+  }
 
   const n = picked.length;
   const one = missing.length === 1;
@@ -637,7 +647,7 @@ async function draftEmail(picked) {
     : '';
   selected.clear();
   render();
-  showMessage(`Email to ${course.tutor} drafted.${dragIn}${note}`, missing.length > 0, {
+  showMessage(`Email to ${course.tutor} drafted.${howTo}${note}`, missing.length > 0, {
     label: `Mark ${n === 1 ? 'as' : `${n} as`} submitted`,
     fn: () => {
       for (const t of picked) t.status = 'submitted';

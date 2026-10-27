@@ -1,4 +1,5 @@
-// Copies the app's web files into www/, which Capacitor packages into the Android app.
+// Copies the app's web files into www/. Capacitor packages www/ into the Android app, and the
+// same folder is what's published as the website (see .github/workflows/pages.yml).
 // The desktop app doesn't use this: Electron loads the files from the project folder.
 const fs = require('fs');
 const path = require('path');
@@ -11,7 +12,15 @@ const files = [
   'script.js',
   'sync.js',
   'mobile.js',
+  'web.js',
   'icon.png',
+  // Website only: install details, icons and the offline service worker
+  'manifest.webmanifest',
+  'sw.js',
+  'icons/icon-192.png',
+  'icons/icon-512.png',
+  'icons/icon-maskable-512.png',
+  'icons/apple-touch-icon.png',
   // Kept at the same path, since index.html loads it from there
   'node_modules/@supabase/supabase-js/dist/umd/supabase.js',
 ];
