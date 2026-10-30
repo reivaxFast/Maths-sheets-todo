@@ -1132,35 +1132,67 @@ function base64ToBytes(b64) {
   return bytes;
 }
 
-document.getElementById('export-btn').addEventListener('click', async () => {
+// Where each task PDF goes in an export, keyed by task id: { [taskId]: { name, data } }.
+// Export includes problem sheets only; Export all includes every kind, and course notes
+// as `courseNotes: { [courseId]: [{ id, name, data }] }`. Older versions of the app ignore
+// the extra fields, so these files still import there (without those PDFs).
+const EXPORT_PDF_FIELDS = { problem: 'problemSheets', work: 'submissions', marked: 'markedWork' };
+
+const pdfData = async blob => bytesToBase64(new Uint8Array(await blob.arrayBuffer()));
+
+// `full`: Export all. PDFs that can't be found (attached on another device that hasn't
+// uploaded them yet) are left out, and the message says how many.
+async function exportTasks(full) {
   if (tasks.length === 0 && courses.length === 0) {
     showMessage('Nothing to export yet.', true);
     return;
-  }
-
-  const problemSheets = {};
-  for (const task of tasks) {
-    if (!task.problemName) continue;
-    const key = PDF_KINDS.problem.key(task.id);
-    const blob = await getPdf(key) || await remotePdf(key);
-    if (!blob) continue;
-    problemSheets[task.id] = {
-      name: task.problemName,
-      data: bytesToBase64(new Uint8Array(await blob.arrayBuffer())),
-    };
   }
 
   const data = {
     format: EXPORT_FORMAT,
     version: EXPORT_VERSION,
     exportedAt: new Date().toISOString(),
-    // Course notes aren't exported, so their file lists are left out
+    // PDF names come back from the PDFs themselves, so they're left out here
     courses: courses.map(({ files, ...c }) => c),
-    // Submission and marked work file names are left out, since those PDFs aren't exported
-    tasks: tasks.map(({ pdfName, markedName, ...t }) => t),
-    problemSheets,
+    tasks: tasks.map(({ problemName, pdfName, markedName, ...t }) => t),
   };
-  const name = `tasks-${today()}.todo`;
+  let included = 0;
+  let missing = 0;
+
+  for (const [kindId, field] of Object.entries(EXPORT_PDF_FIELDS)) {
+    if (!full && kindId !== 'problem') continue;
+    const kind = PDF_KINDS[kindId];
+    data[field] = {};
+    for (const task of tasks) {
+      if (!task[kind.field]) continue;
+      const key = kind.key(task.id);
+      const blob = await getPdf(key) || await remotePdf(key);
+      if (!blob) {
+        missing++;
+        continue;
+      }
+      data[field][task.id] = { name: task[kind.field], data: await pdfData(blob) };
+      included++;
+    }
+  }
+
+  if (full) {
+    data.courseNotes = {};
+    for (const course of courses) {
+      for (const file of course.files || []) {
+        const key = noteKey(course, file);
+        const blob = await getPdf(key) || await remotePdf(key);
+        if (!blob) {
+          missing++;
+          continue;
+        }
+        (data.courseNotes[course.id] ||= []).push({ id: file.id, name: file.name, data: await pdfData(blob) });
+        included++;
+      }
+    }
+  }
+
+  const name = full ? `worksheets-everything-${today()}.todo` : `tasks-${today()}.todo`;
   if (window.files?.saveExport) {
     // On Android: handed to the share sheet, since there's no downloads folder to save into
     const result = await window.files.saveExport(name, JSON.stringify(data));
@@ -1174,9 +1206,27 @@ document.getElementById('export-btn').addEventListener('click', async () => {
   a.click();
   URL.revokeObjectURL(a.href);
 
-  const n = Object.keys(problemSheets).length;
+  const what = full ? 'PDF' : 'problem sheet';
   showMessage(`Exported ${tasks.length} task${tasks.length === 1 ? '' : 's'}` +
-    (n ? ` with ${n} problem sheet${n === 1 ? '' : 's'}.` : '.'));
+    (included ? ` with ${included} ${what}${included === 1 ? '' : 's'}.` : '.') +
+    (missing ? ` ${missing} ${what}${missing === 1 ? '' : 's'} couldn't be found here and ` +
+      `${missing === 1 ? "wasn't" : "weren't"} included: open the app on the device that added ` +
+      `${missing === 1 ? 'it' : 'them'} so ${missing === 1 ? 'it' : 'they'} can sync, then try again.` : ''),
+    missing > 0);
+}
+
+document.getElementById('export-btn').addEventListener('click', () => exportTasks(false));
+
+const exportAllBtn = document.getElementById('export-all-btn');
+exportAllBtn.addEventListener('click', async () => {
+  exportAllBtn.disabled = true;
+  exportAllBtn.textContent = 'Exporting…';
+  try {
+    await exportTasks(true);
+  } finally {
+    exportAllBtn.disabled = false;
+    exportAllBtn.textContent = 'Export all';
+  }
 });
 
 const importFile = document.getElementById('import-file');
@@ -1202,7 +1252,12 @@ async function importText(text) {
   // Oldest exports were a plain array of tasks with no courses
   const incomingTasks = Array.isArray(data) ? data : data?.tasks;
   const incomingCourses = Array.isArray(data?.courses) ? data.courses : [];
-  const incomingSheets = data && typeof data.problemSheets === 'object' ? data.problemSheets : {};
+  // Each kind's PDFs, as { [taskId]: { name, data } }; older exports only have problem sheets
+  const incomingPdfs = {};
+  for (const [kindId, field] of Object.entries(EXPORT_PDF_FIELDS)) {
+    incomingPdfs[kindId] = data && typeof data[field] === 'object' && data[field] ? data[field] : {};
+  }
+  const incomingNotes = data && typeof data.courseNotes === 'object' && data.courseNotes ? data.courseNotes : {};
   if (!Array.isArray(incomingTasks)) {
     showMessage("That file isn't a valid task export.", true);
     return;
@@ -1232,32 +1287,53 @@ async function importText(text) {
     addedCourses++;
   }
 
-  // Saves a task's problem sheet from the file; returns true if one was added
-  async function importSheet(task, sheet) {
-    if (!sheet || typeof sheet.name !== 'string' || typeof sheet.data !== 'string') return false;
+  // Saves a PDF from the file under `key`; returns true if it was saved
+  async function importPdf(key, entry) {
+    if (!entry || typeof entry.name !== 'string' || typeof entry.data !== 'string') return false;
     try {
-      const file = new Blob([base64ToBytes(sheet.data)], { type: 'application/pdf' });
-      await putPdf(PDF_KINDS.problem.key(task.id), file);
+      await putPdf(key, new Blob([base64ToBytes(entry.data)], { type: 'application/pdf' }));
+      return true;
     } catch {
       return false;
     }
-    task.problemName = sheet.name;
-    return true;
+  }
+
+  let addedPdfs = 0;
+  // Adds each of a task's PDFs from the file that the task doesn't have yet
+  async function importTaskPdfs(task) {
+    for (const [kindId, kind] of Object.entries(PDF_KINDS)) {
+      const entry = incomingPdfs[kindId][task.id];
+      if (task[kind.field] || !await importPdf(kind.key(task.id), entry)) continue;
+      task[kind.field] = entry.name;
+      addedPdfs++;
+    }
+  }
+
+  // Course notes, for new and existing courses, skipping files already there
+  for (const [courseId, files] of Object.entries(incomingNotes)) {
+    const course = courses.find(c => c.id === courseId);
+    if (!course || !Array.isArray(files)) continue;
+    course.files ||= [];
+    for (const f of files) {
+      if (!f || typeof f.id !== 'number' || course.files.some(x => x.id === f.id)) continue;
+      if (!await importPdf(noteKey(course, f), f)) continue;
+      course.files.push({ id: f.id, name: f.name });
+      addedPdfs++;
+    }
   }
 
   const validStatuses = STATUSES.map(s => s.id);
   let added = 0;
-  let addedSheets = 0;
   for (const t of incomingTasks) {
     if (!t || !isDate(t.due)) continue;
     // Tasks are sheets now, but older exports have typed text instead
     const hasSheet = typeof t.sheet === 'string' && t.sheet.trim() !== '';
     if (!hasSheet && typeof t.text !== 'string') continue;
 
-    // A task already in the list isn't duplicated, but gets the problem sheet if it lacks one
+    // A task already in the list isn't duplicated, but gets any PDFs it lacks
     const existing = tasks.find(e => e.id === t.id);
     if (existing) {
-      if (!existing.problemName && await importSheet(existing, incomingSheets[t.id])) addedSheets++;
+      await importTaskPdfs(existing);
       continue;
     }
 
@@ -1269,7 +1345,7 @@ async function importText(text) {
       status: validStatuses.includes(t.status) ? t.status : null,
       courseId: courseIds.has(t.courseId) ? t.courseId : null,
     };
-    if (await importSheet(task, incomingSheets[t.id])) addedSheets++;
+    await importTaskPdfs(task);
     tasks.push(task);
     added++;
   }
@@ -1279,7 +1355,7 @@ async function importText(text) {
   const parts = [];
   if (added) parts.push(`${added} task${added === 1 ? '' : 's'}`);
   if (addedCourses) parts.push(`${addedCourses} course${addedCourses === 1 ? '' : 's'}`);
-  if (addedSheets) parts.push(`${addedSheets} problem sheet${addedSheets === 1 ? '' : 's'}`);
+  if (addedPdfs) parts.push(`${addedPdfs} PDF${addedPdfs === 1 ? '' : 's'}`);
   showMessage(parts.length ? `Imported ${parts.join(', ')}.` : 'Nothing new to import.');
 }
 
