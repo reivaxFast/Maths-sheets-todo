@@ -6,6 +6,9 @@
 //   browsers can't resolve.
 // - marked.umd.js: formats Claude's answers (headings, lists, code).
 // - katex/: renders maths written as $...$ / $$...$$ (with its woff2 fonts).
+// - pdfjs.js: pdf.js, for reading the text of lecture notes so only the relevant pages are
+//   sent. Its worker is bundled in and runs on the page (globalThis.pdfjsWorker), since
+//   module workers don't load reliably from the desktop app's file:// pages.
 const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
@@ -32,6 +35,25 @@ esbuild.buildSync({
   outfile: path.join(out, 'anthropic-sdk.js'),
 });
 
+esbuild.buildSync({
+  stdin: {
+    contents: [
+      "import * as pdfjsLib from 'pdfjs-dist/build/pdf.min.mjs';",
+      "import * as pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs';",
+      'globalThis.pdfjsWorker = pdfjsWorker;',
+      'window.pdfjsLib = pdfjsLib;',
+    ].join('\n'),
+    resolveDir: root,
+  },
+  bundle: true,
+  format: 'iife',
+  platform: 'browser',
+  target: 'es2022',
+  minify: true,
+  legalComments: 'eof',
+  outfile: path.join(out, 'pdfjs.js'),
+});
+
 fs.copyFileSync(path.join(root, 'node_modules/marked/lib/marked.umd.js'), path.join(out, 'marked.umd.js'));
 
 const katex = path.join(root, 'node_modules/katex/dist');
@@ -43,4 +65,4 @@ for (const font of fs.readdirSync(path.join(katex, 'fonts')).filter(f => f.endsW
 }
 
 console.log(`Built vendor/: @anthropic-ai/sdk ${versionOf('@anthropic-ai/sdk')}, ` +
-  `marked ${versionOf('marked')}, katex ${versionOf('katex')}`);
+  `marked ${versionOf('marked')}, katex ${versionOf('katex')}, pdfjs-dist ${versionOf('pdfjs-dist')}`);

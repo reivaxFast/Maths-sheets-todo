@@ -4,38 +4,70 @@
 //
 // - Uses the user's own Anthropic API key, kept only on this device (localStorage). It isn't
 //   synced or exported. Requests go straight from the app to the Anthropic API.
-// - In the desktop and Android apps, PDFs are uploaded once with the Files API and reused by
-//   file id (lecture notes can be larger than the 32 MB a request may carry). Ids are
-//   remembered per PDF and re-uploaded if the PDF changes. The Files API doesn't accept
-//   requests from web pages, so the upload goes through the app's native side
-//   (window.files.claudeUpload, from preload.js / mobile.js).
+// - Cost: reading is what's billed, so long lecture notes are cut down to the pages that match
+//   the worksheet and the first question (or all pages, or a range the user types). Each set of
+//   notes' text is extracted on this device once (pdf.js) and searched locally; the chosen
+//   pages are copied into a smaller PDF (pdf-lib). Both are kept in IndexedDB (claude-index).
+// - The notes come first in the request, so worksheets in a course that send the same pages
+//   share the cached notes. Everything sent is cached for an hour (prompt caching), so
+//   follow-up questions pay little for the materials.
+// - The model is chosen per conversation (Haiku, Sonnet or Opus); the default is remembered.
+// - In the desktop and Android apps, PDFs are uploaded with the Files API and reused by file
+//   id. The Files API doesn't accept requests from web pages, so the upload goes through the
+//   app's native side (window.files.claudeUpload, from preload.js / mobile.js).
 // - On the website there's no native side, so PDFs go inside each request instead (base64),
 //   which limits them to about 22 MB in total. They're not stored with the conversation:
-//   they're read back from the app's storage for each question.
-// - The materials are cached for an hour (prompt caching), so follow-up questions only pay
-//   full price for the question and answer.
-// - Each worksheet keeps its own conversation on this device. The materials can't change
-//   mid-conversation (the API only allows appending), so changing them starts a new one.
+//   they're read back from this device's storage for each question.
+// - Each worksheet keeps its own conversation on this device. The model and materials can't
+//   change mid-conversation (the API only allows appending), so changing them starts a new one.
 //
-// Libraries (vendor/, built by scripts/build-vendor.js) load the first time a chat opens.
+// Libraries (vendor/, built by scripts/build-vendor.js) load the first time a chat opens;
+// pdf.js only when notes need reading.
 
 (() => {
-  const MODEL = 'claude-opus-5-5';
+  // US$ per million tokens: input, 1-hour cache write (2x input), cache read, output.
+  // Haiku 5.5's rates are for prompts up to 100K tokens; above that they're 5x (see costOf).
+  const MODELS = {
+    'claude-haiku-5-5': {
+      label: 'Haiku 5.5: cheapest, for quick questions',
+      price: { input: 0.1, cacheWrite: 0.2, cacheRead: 0.01, output: 0.5 },
+      longPromptFactor: 5,
+      effort: 'medium',
+      fallbacks: false, // No server-side fallback for Haiku 5.5
+    },
+    'claude-sonnet-5-5': {
+      label: 'Sonnet 5.5: good value for most questions',
+      price: { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 },
+      effort: 'medium',
+      fallbacks: true,
+    },
+    'claude-opus-5-5': {
+      label: 'Opus 5.5: most capable, for the hardest problems',
+      price: { input: 4, cacheWrite: 8, cacheRead: 0.2, output: 20 },
+      effort: 'high',
+      fallbacks: true,
+    },
+  };
+  const DEFAULT_MODEL = 'claude-sonnet-5-5';
+
   const KEY_STORAGE = 'claudeApiKey';
-  const FILES_STORAGE = 'claudeFiles'; // { owner, files: { [pdfKey]: { fileId, name, size } } }
-  const CHAT_PREFIX = 'claudeChat:'; // + task id: { docs: [pdfKey], messages: [API messages] }
-  // Claude Opus 5.5, US$ per million tokens: input, 1-hour cache write, cache read, output
-  const PRICE = { input: 4, cacheWrite: 8, cacheRead: 0.2, output: 20 };
+  const MODEL_STORAGE = 'claudeModel';
+  const FILES_STORAGE = 'claudeFiles'; // { owner, files: { [materialId]: { fileId, size } } }
+  const CHAT_PREFIX = 'claudeChat:'; // + task id: { model, docs: [{ key, pages }], messages }
   const CACHE = { type: 'ephemeral', ttl: '1h' };
   // Website only: PDFs sent inside the request. A request may be 32 MB and base64 adds a
   // third, so this leaves room for the rest of the conversation.
   const INLINE_LIMIT = 22 * 1024 * 1024;
+  // Notes longer than this are cut down to the pages that match, about PAGE_BUDGET of them
+  const AUTO_MIN_PAGES = 30;
+  const PAGE_BUDGET = 20;
+  const MAX_PAGES = 600; // Claude's limit per request
 
   const SYSTEM = [
     "You are helping a university student with a worksheet from one of their courses.",
-    "The first message contains the worksheet and the course's lecture notes, and sometimes the student's own submission or their marked work.",
+    "The first message contains the course's lecture notes (sometimes only the pages that match the worksheet, as marked in their title), the worksheet, and sometimes the student's own submission or their marked work.",
     "Answer the student's questions from these materials: use the methods, notation and results in the lecture notes, and say where in the notes something comes from (for example the section, theorem or page).",
-    "If the notes don't cover what's needed, say so before drawing on outside knowledge.",
+    "If the material you have doesn't cover what's needed, say so before drawing on outside knowledge; when only some pages of the notes were included, you can suggest the student starts a new conversation with more of the notes.",
     "When they ask about a question, help them understand how to approach it; give a full worked solution when they ask for one.",
     "Write mathematics in LaTeX, between $...$ for inline maths and $$...$$ for displayed equations.",
   ].join(' ');
@@ -67,6 +99,7 @@
   };
 
   const apiKey = () => store.get(KEY_STORAGE);
+  const defaultModel = () => (MODELS[store.get(MODEL_STORAGE)] ? store.get(MODEL_STORAGE) : DEFAULT_MODEL);
   const mb = bytes => `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
   const dollars = n => (n < 0.01 ? '<$0.01' : `$${n.toFixed(2)}`);
   const escapeHtml = s => String(s).replace(/[&<>"']/g, c =>
@@ -130,6 +163,12 @@
     return libsLoaded;
   }
 
+  let pdfjsLoaded = null;
+  const loadPdfjs = () => (pdfjsLoaded ||= loadScript('vendor/pdfjs.js').catch(e => {
+    pdfjsLoaded = null;
+    throw e;
+  }));
+
   const client = () => new window.Anthropic({ apiKey: apiKey(), dangerouslyAllowBrowser: true });
 
   // Formats an answer: maths is taken out first (so markdown doesn't mangle underscores and
@@ -152,6 +191,8 @@
     });
   }
 
+  class UserError extends Error {}
+
   // Turns an API error into something to show
   function explain(e) {
     const A = window.Anthropic;
@@ -164,24 +205,32 @@
     if (A && e instanceof A.APIConnectionError) return 'Couldn\'t reach Claude. Check your internet connection.';
     if (/credit balance/i.test(text)) return 'Your Anthropic account is out of credit. Add some in the Claude Console (Billing).';
     if (/page|prompt is too long|too large|exceed/i.test(text)) {
-      return 'These PDFs are too big to read together (Claude reads up to 600 pages at once). ' +
-        'Start a new conversation with fewer lecture notes ticked.';
+      return `These PDFs are too big to read together (Claude reads up to ${MAX_PAGES} pages at once). ` +
+        'Start a new conversation with fewer pages of the notes.';
     }
     return `Claude couldn't answer: ${text.replace(/^\d{3}\s*/, '')}`;
   }
 
-  class UserError extends Error {}
+  // On-device store for the notes' text and the cut-down PDFs (IndexedDB "claude-index")
 
-  // Uploads (Files API)
+  const indexDb = new Promise((resolve, reject) => {
+    const req = indexedDB.open('claude-index', 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore('text'); // pdfKey -> { size, pages: [text per page] }
+      req.result.createObjectStore('subsets'); // "pdfKey|size|1,2,3" -> Blob
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
 
-  // File ids belong to the API key's organisation, so a different key starts afresh
-  function fileCache() {
-    const owner = (apiKey() || '').slice(-8);
-    const cache = store.json(FILES_STORAGE, null);
-    return cache?.owner === owner ? cache : { owner, files: {} };
+  async function idb(storeName, mode, fn) {
+    const db = await indexDb;
+    return new Promise((resolve, reject) => {
+      const req = fn(db.transaction(storeName, mode).objectStore(storeName));
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
   }
-
-  const canUpload = () => typeof window.files?.claudeUpload === 'function';
 
   async function pdfBlob(doc) {
     const blob = await getPdf(doc.key) || await remotePdf(doc.key);
@@ -191,6 +240,140 @@
     }
     return blob;
   }
+
+  // The text of each page, extracted once per version of the PDF
+  async function pageTexts(doc, onStatus) {
+    const blob = await pdfBlob(doc);
+    const known = await idb('text', 'readonly', s => s.get(doc.key));
+    if (known?.size === blob.size) return known.pages;
+
+    await loadPdfjs();
+    const loading = window.pdfjsLib.getDocument({
+      data: new Uint8Array(await blob.arrayBuffer()),
+      isEvalSupported: false,
+    });
+    const pdf = await loading.promise;
+    const pages = [];
+    try {
+      for (let n = 1; n <= pdf.numPages; n++) {
+        if (n % 10 === 1) onStatus(`Reading the text of ${doc.name} (first time only): page ${n} of ${pdf.numPages}…`);
+        const page = await pdf.getPage(n);
+        const content = await page.getTextContent();
+        pages.push(content.items.map(item => item.str).join(' ').replace(/\s+/g, ' ').trim());
+        page.cleanup();
+      }
+    } finally {
+      loading.destroy();
+    }
+    await idb('text', 'readwrite', s => s.put({ size: blob.size, pages }, doc.key));
+    return pages;
+  }
+
+  // Finding the pages that match
+
+  const STOP_WORDS = new Set(('the and for that with this are from which then let show find prove '
+    + 'where when what will can its has have not but all any each was were been into such than these '
+    + 'those there their our you your use using given give question questions part parts sheet answer '
+    + 'following hence thus also may must one two three four five').split(' '));
+
+  const termsOf = text => (text.toLowerCase().match(/[a-z][a-z'-]{2,}/g) || [])
+    .map(w => w.replace(/'s$|-$/, ''))
+    .filter(w => !STOP_WORDS.has(w));
+
+  // Ranks pages by BM25 against the worksheet and question (question words count double), then
+  // takes the best pages plus the page after each (results often run over), up to the budget
+  function pickPages(pageTextsList, query, budget = PAGE_BUDGET) {
+    const docs = pageTextsList.map(termsOf);
+    const n = docs.length;
+    const avgLength = docs.reduce((sum, d) => sum + d.length, 0) / Math.max(1, n) || 1;
+    const df = new Map();
+    for (const d of docs) for (const t of new Set(d)) df.set(t, (df.get(t) || 0) + 1);
+    const weights = new Map();
+    for (const [t, w] of query) if (df.has(t)) weights.set(t, w);
+
+    const scored = docs.map((d, i) => {
+      const tf = new Map();
+      for (const t of d) tf.set(t, (tf.get(t) || 0) + 1);
+      let score = 0;
+      for (const [t, w] of weights) {
+        const f = tf.get(t);
+        if (!f) continue;
+        const idf = Math.log(1 + (n - df.get(t) + 0.5) / (df.get(t) + 0.5));
+        score += w * idf * (f * 2.2) / (f + 1.2 * (0.25 + 0.75 * d.length / avgLength));
+      }
+      return { page: i + 1, score };
+    }).filter(p => p.score > 0).sort((a, b) => b.score - a.score);
+
+    const chosen = new Set();
+    for (const { page } of scored) {
+      if (chosen.size >= budget) break;
+      chosen.add(page);
+      if (page < n && chosen.size < budget) chosen.add(page + 1);
+    }
+    return [...chosen].sort((a, b) => a - b);
+  }
+
+  function queryTerms(worksheetText, question) {
+    const query = new Map();
+    for (const t of termsOf(worksheetText)) query.set(t, Math.max(query.get(t) || 0, 1));
+    for (const t of termsOf(question)) query.set(t, 2);
+    return query;
+  }
+
+  // "3-7, 12" -> [3, 4, 5, 6, 7, 12]; null if it doesn't make sense for a PDF of `count` pages
+  function parsePages(text, count) {
+    const pages = new Set();
+    for (const part of text.split(/[,\s]+/).filter(Boolean)) {
+      const m = /^(\d+)(?:-(\d+))?$/.exec(part);
+      if (!m) return null;
+      const from = Number(m[1]);
+      const to = Number(m[2] || m[1]);
+      if (from < 1 || to < from || to > count) return null;
+      for (let p = from; p <= to; p++) pages.add(p);
+    }
+    return pages.size ? [...pages].sort((a, b) => a - b) : null;
+  }
+
+  // [3, 4, 5, 9] -> "3–5, 9"
+  function describePages(pages) {
+    const runs = [];
+    for (const p of pages) {
+      const last = runs[runs.length - 1];
+      if (last && p === last[1] + 1) last[1] = p;
+      else runs.push([p, p]);
+    }
+    return runs.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(', ');
+  }
+
+  // The PDF to send for a material: the whole file, or a copy with only its chosen pages
+  // (kept, so the same bytes are sent each time and the cache keeps matching)
+  async function materialBlob(material) {
+    const blob = await pdfBlob(material);
+    if (!material.pages) return blob;
+    const id = `${material.key}|${blob.size}|${material.pages.join(',')}`;
+    const kept = await idb('subsets', 'readonly', s => s.get(id));
+    if (kept) return kept;
+
+    await loadPdfLib();
+    const { PDFDocument } = window.PDFLib;
+    const source = await PDFDocument.load(await blob.arrayBuffer(), { ignoreEncryption: true, updateMetadata: false });
+    const subset = await PDFDocument.create({ updateMetadata: false });
+    for (const page of await subset.copyPages(source, material.pages.map(p => p - 1))) subset.addPage(page);
+    const out = new Blob([await subset.save()], { type: 'application/pdf' });
+    await idb('subsets', 'readwrite', s => s.put(out, id));
+    return out;
+  }
+
+  // Uploads (Files API, desktop and Android apps)
+
+  // File ids belong to the API key's organisation, so a different key starts afresh
+  function fileCache() {
+    const owner = (apiKey() || '').slice(-8);
+    const cache = store.json(FILES_STORAGE, null);
+    return cache?.owner === owner ? cache : { owner, files: {} };
+  }
+
+  const canUpload = () => typeof window.files?.claudeUpload === 'function';
 
   // The native upload reports an HTTP status rather than throwing the SDK's error classes
   function uploadError(result, name) {
@@ -205,49 +388,109 @@
       : `Couldn't upload ${name}. Check your internet connection.`));
   }
 
-  async function uploadedId(doc, onStatus) {
-    const blob = await pdfBlob(doc);
+  async function uploadedId(material, blob, onStatus) {
+    const id = `${material.key}|${material.pages ? material.pages.join(',') : 'all'}`;
     const cache = fileCache();
-    const known = cache.files[doc.key];
-    if (known && known.size === blob.size && known.name === doc.name) return known.fileId;
+    const known = cache.files[id];
+    if (known && known.size === blob.size) return known.fileId;
 
-    onStatus(`Uploading ${doc.name} (${mb(blob.size)})…`);
+    onStatus(`Uploading ${material.name} (${mb(blob.size)})…`);
     const result = await window.files.claudeUpload({
       apiKey: apiKey(),
-      name: unsafeFileChars(doc.name),
+      name: unsafeFileChars(material.name),
       data: await blob.arrayBuffer(),
     });
-    if (!result.ok) throw uploadError(result, doc.name);
+    if (!result.ok) throw uploadError(result, material.name);
     // The PDF changed: the old copy isn't needed any more
     if (known) window.files.claudeDelete?.({ apiKey: apiKey(), id: known.fileId });
-    cache.files[doc.key] = { fileId: result.id, name: doc.name, size: blob.size };
+    cache.files[id] = { fileId: result.id, size: blob.size };
     store.set(FILES_STORAGE, JSON.stringify(cache));
     return result.id;
   }
 
-  // Website: the PDFs' base64, read from the app's storage for every request (the same bytes
-  // each time, so the cache still matches)
-  async function inlineData(docs) {
-    const blobs = await Promise.all(docs.map(pdfBlob));
+  // Website: the PDFs' base64, read from this device's storage for every request
+  async function inlineData(blobs, materials) {
     const total = blobs.reduce((n, b) => n + b.size, 0);
     if (total > INLINE_LIMIT) {
-      const biggest = docs[blobs.indexOf(blobs.reduce((a, b) => (b.size > a.size ? b : a)))];
+      const biggest = materials[blobs.indexOf(blobs.reduce((a, b) => (b.size > a.size ? b : a)))];
       throw new UserError(`These PDFs add up to ${mb(total)}, more than the website can send at once ` +
-        `(about ${mb(INLINE_LIMIT)}). Untick ${biggest.name} and ask again, or use the desktop or ` +
-        'Android app, which can upload larger files.');
+        `(about ${mb(INLINE_LIMIT)}). Send fewer pages of ${biggest.name}, untick it, or use the ` +
+        'desktop or Android app, which can upload larger files.');
     }
     return Promise.all(blobs.map(async b => bytesToBase64(new Uint8Array(await b.arrayBuffer()))));
   }
 
-  // What Claude can read for a task: the worksheet always, the rest optional
+  const titleOf = (m, pageCount) => `${m.label}: ${m.name}` +
+    (m.pages ? ` (only pages ${describePages(m.pages)} of ${pageCount ?? m.pageCount})` : '');
+
+  // The document blocks for a conversation's materials: notes first (so they're the shared,
+  // cached part), then the worksheet and anything else ticked
+  async function materialBlocks(materials, onStatus) {
+    const blobs = [];
+    for (const m of materials) blobs.push(await materialBlob(m));
+    let sources;
+    if (canUpload()) {
+      sources = [];
+      for (let i = 0; i < materials.length; i++) {
+        sources.push({ type: 'file', file_id: await uploadedId(materials[i], blobs[i], onStatus) });
+      }
+    } else {
+      onStatus('Preparing the PDFs…');
+      const data = await inlineData(blobs, materials);
+      sources = data.map(d => ({ type: 'base64', media_type: 'application/pdf', data: d }));
+    }
+    const blocks = materials.map((m, i) => ({ type: 'document', source: sources[i], title: titleOf(m) }));
+    const lastNotes = materials.map(m => m.notes).lastIndexOf(true);
+    if (lastNotes >= 0) blocks[lastNotes].cache_control = CACHE;
+    blocks[blocks.length - 1].cache_control = CACHE;
+    return blocks;
+  }
+
+  // Website conversations are saved without the PDFs' base64 (far too big for this device's
+  // storage) and get it back from this device's storage before each request
+  function forStorage(messages) {
+    return messages.map((m, i) => i > 0 || typeof m.content === 'string' ? m : {
+      ...m,
+      content: m.content.map(b => b.source?.type === 'base64' ? { ...b, source: { ...b.source, data: null } } : b),
+    });
+  }
+
+  async function withPdfData(messages, materials) {
+    const first = messages[0];
+    if (!first || typeof first.content === 'string' || !first.content.some(b => b.source?.data === null)) {
+      return messages;
+    }
+    const blobs = [];
+    for (const m of materials) blobs.push(await materialBlob(m));
+    const data = await inlineData(blobs, materials);
+    let i = 0;
+    const content = first.content.map(b => b.source?.data === null
+      ? { ...b, source: { ...b.source, data: data[i++] } }
+      : b);
+    return [{ ...first, content }, ...messages.slice(1)];
+  }
+
+  function costOf(usage, model) {
+    const { price, longPromptFactor = 1 } = MODELS[model] || MODELS[DEFAULT_MODEL];
+    const read = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
+    const factor = read > 100000 ? longPromptFactor : 1;
+    return factor * (
+      (usage.input_tokens || 0) * price.input +
+      (usage.cache_creation_input_tokens || 0) * price.cacheWrite +
+      (usage.cache_read_input_tokens || 0) * price.cacheRead +
+      (usage.output_tokens || 0) * price.output
+    ) / 1e6;
+  }
+
+  // What Claude can read for a task, in the order it's sent: notes, worksheet, then optional
   function docsFor(task) {
     const course = courseOf(task);
     const docs = [];
+    for (const f of course?.files || []) {
+      docs.push({ key: noteKey(course, f), name: f.name, label: 'Lecture notes', notes: true, on: true, mode: 'auto' });
+    }
     if (task.problemName) {
       docs.push({ key: PDF_KINDS.problem.key(task.id), name: task.problemName, label: 'Worksheet', fixed: true, on: true });
-    }
-    for (const f of course?.files || []) {
-      docs.push({ key: noteKey(course, f), name: f.name, label: 'Lecture notes', on: true });
     }
     if (task.pdfName) {
       docs.push({ key: PDF_KINDS.work.key(task.id), name: pdfName(task, PDF_KINDS.work), label: 'My submission', on: false });
@@ -258,61 +501,37 @@
     return docs;
   }
 
-  async function materialBlocks(docs, onStatus) {
-    const blocks = [];
-    if (canUpload()) {
-      for (const doc of docs) {
-        blocks.push({
-          type: 'document',
-          source: { type: 'file', file_id: await uploadedId(doc, onStatus) },
-          title: `${doc.label}: ${doc.name}`,
-        });
+  // Works out each ticked document's pages for a new conversation
+  async function chooseMaterials(docs, question, onStatus) {
+    const chosen = docs.filter(d => d.on);
+    const worksheet = chosen.find(d => d.fixed);
+    let worksheetText = null;
+    const materials = [];
+    for (const d of chosen) {
+      const m = { key: d.key, name: d.name, label: d.label, notes: !!d.notes, pages: null };
+      if (d.notes) {
+        const texts = await pageTexts(d, onStatus);
+        m.pageCount = texts.length;
+        if (d.mode === 'custom') {
+          m.pages = parsePages(d.range || '', texts.length);
+          if (!m.pages) throw new UserError(`Pages for ${d.name}: write them like 10-25, 40 (it has ${texts.length} pages).`);
+        } else if (d.mode === 'auto' && texts.length > AUTO_MIN_PAGES) {
+          worksheetText ??= worksheet ? (await pageTexts(worksheet, onStatus)).join(' ') : '';
+          const picked = pickPages(texts, queryTerms(worksheetText, question));
+          // No text to match on (e.g. scanned notes): send them whole if they fit
+          m.pages = picked.length ? picked : null;
+        }
+        if (!m.pages && texts.length > MAX_PAGES) {
+          throw new UserError(`${d.name} has ${texts.length} pages, more than Claude reads at once ` +
+            `(${MAX_PAGES}). Choose some pages of it.`);
+        }
       }
-    } else {
-      onStatus('Preparing the PDFs…');
-      const data = await inlineData(docs);
-      docs.forEach((doc, i) => blocks.push({
-        type: 'document',
-        source: { type: 'base64', media_type: 'application/pdf', data: data[i] },
-        title: `${doc.label}: ${doc.name}`,
-      }));
+      materials.push(m);
     }
-    // The materials are the expensive, unchanging part: cache them for an hour
-    blocks[blocks.length - 1].cache_control = CACHE;
-    return blocks;
+    return materials;
   }
 
-  // Website conversations are saved without the PDFs' base64 (far too big for this device's
-  // storage) and get it back from the app's storage before each request
-  function forStorage(messages) {
-    return messages.map((m, i) => i > 0 || typeof m.content === 'string' ? m : {
-      ...m,
-      content: m.content.map(b => b.source?.type === 'base64' ? { ...b, source: { ...b.source, data: null } } : b),
-    });
-  }
-
-  // `docs`: the conversation's documents in order, as { key, name }
-  async function withPdfData(messages, docs) {
-    const first = messages[0];
-    if (!first || typeof first.content === 'string' || !first.content.some(b => b.source?.data === null)) {
-      return messages;
-    }
-    const data = await inlineData(docs);
-    let i = 0;
-    const content = first.content.map(b => b.source?.data === null
-      ? { ...b, source: { ...b.source, data: data[i++] } }
-      : b);
-    return [{ ...first, content }, ...messages.slice(1)];
-  }
-
-  const costOf = usage => (
-    (usage.input_tokens || 0) * PRICE.input +
-    (usage.cache_creation_input_tokens || 0) * PRICE.cacheWrite +
-    (usage.cache_read_input_tokens || 0) * PRICE.cacheRead +
-    (usage.output_tokens || 0) * PRICE.output
-  ) / 1e6;
-
-  // Connect (API key)
+  // Connect (API key) and settings
 
   let connectModal = null;
   let afterConnect = null;
@@ -371,7 +590,7 @@
         await loadLibs();
         // Free, and fails if the key is wrong. (The models endpoint would be the obvious
         // check, but it doesn't allow web pages to read its error responses.)
-        await client().messages.countTokens({ model: MODEL, messages: [{ role: 'user', content: 'Hi' }] });
+        await client().messages.countTokens({ model: defaultModel(), messages: [{ role: 'user', content: 'Hi' }] });
         input.value = '';
         modal.refresh();
         updateHeader();
@@ -440,20 +659,35 @@
     document.body.classList.remove('chatting');
   }
 
+  function loadChat(storageKey) {
+    const chat = store.json(storageKey, null) || { model: null, docs: null, messages: [] };
+    // Conversations from before page choice and model choice: whole PDFs, on Claude Opus 5.5
+    if (chat.messages.length) {
+      chat.model ||= 'claude-opus-5-5';
+      chat.docs = (chat.docs || []).map(d => (typeof d === 'string' ? { key: d, pages: null } : d));
+    }
+    return chat;
+  }
+
   function buildChat(task) {
     const storageKey = CHAT_PREFIX + task.id;
-    const chat = store.json(storageKey, null) || { docs: null, messages: [] };
+    const chat = loadChat(storageKey);
     const docs = docsFor(task);
-    // A conversation keeps the materials it started with
-    if (chat.messages.length && chat.docs) {
-      for (const d of docs) d.on = d.fixed || chat.docs.includes(d.key);
+    const locked = chat.messages.length > 0;
+    // A conversation keeps the model and materials it started with
+    if (locked) {
+      for (const d of docs) {
+        const used = chat.docs.find(x => x.key === d.key);
+        d.on = !!used;
+        d.sent = used;
+      }
     }
+    let model = locked ? chat.model : defaultModel();
     let busy = false;
 
     const modal = el('div', 'modal claude-modal');
     const box = el('div', 'modal-box claude-chat');
     const head = el('div', 'modal-head');
-    const title = el('h2', null, taskTitle(task));
     const newChat = button('New conversation', 'secondary', () => {
       if (busy || (chat.messages.length && !confirm('Start a new conversation? This one will be cleared.'))) return;
       store.set(storageKey, null);
@@ -461,26 +695,66 @@
       chatModal = buildChat(task);
       document.body.append(chatModal);
     });
-    head.append(title, el('div', 'claude-head-actions'));
+    head.append(el('h2', null, taskTitle(task)), el('div', 'claude-head-actions'));
     head.lastChild.append(newChat, button('Close', 'secondary', closeChat));
 
-    // Which PDFs Claude reads
+    // Model and materials
     const materials = el('div', 'claude-materials');
-    const locked = chat.messages.length > 0;
+    const modelRow = el('label', 'claude-model');
+    const modelSelect = el('select');
+    for (const [id, m] of Object.entries(MODELS)) modelSelect.append(new Option(m.label, id));
+    modelSelect.value = model;
+    modelSelect.disabled = locked;
+    modelSelect.addEventListener('change', () => {
+      model = modelSelect.value;
+      store.set(MODEL_STORAGE, model);
+    });
+    modelRow.append(el('span', null, 'Model'), modelSelect);
+    materials.append(modelRow);
+
+    const controls = [modelSelect];
     for (const d of docs) {
-      const label = el('label', 'claude-doc');
+      const row = el('div', 'claude-doc');
+      const label = el('label');
       const tick = el('input');
       tick.type = 'checkbox';
       tick.checked = d.on;
       tick.disabled = d.fixed || locked;
       tick.addEventListener('change', () => (d.on = tick.checked));
       label.append(tick, el('span', null, `${d.label}: ${d.name}`));
-      materials.append(label);
+      row.append(label);
+      if (!d.fixed) controls.push(tick);
+
+      if (d.notes) {
+        if (locked) {
+          if (d.sent) row.append(el('span', 'claude-pages', d.sent.pages ? `pages ${describePages(d.sent.pages)}` : 'all pages'));
+        } else {
+          const mode = el('select', 'claude-pages');
+          mode.append(
+            new Option('Pages for your question', 'auto'),
+            new Option('All pages', 'all'),
+            new Option('Pages…', 'custom'),
+          );
+          const range = el('input', 'claude-range');
+          range.placeholder = 'e.g. 10-25, 40';
+          range.hidden = true;
+          mode.addEventListener('change', () => {
+            d.mode = mode.value;
+            range.hidden = d.mode !== 'custom';
+            if (!range.hidden) range.focus();
+          });
+          range.addEventListener('input', () => (d.range = range.value));
+          row.append(mode, range);
+          controls.push(mode, range);
+        }
+      }
+      materials.append(row);
     }
-    const lockNote = el('div', 'claude-note', locked
-      ? 'To change what Claude reads, start a new conversation.'
-      : 'Lecture notes can be large: each first question reads them in full, then they\'re cached for an hour.');
-    materials.append(lockNote);
+    const note = el('div', 'claude-note', locked
+      ? 'To change the model or what Claude reads, start a new conversation.'
+      : `For notes over ${AUTO_MIN_PAGES} pages, "Pages for your question" sends about ${PAGE_BUDGET} pages ` +
+        'that match the worksheet and your first question, which costs far less than all of them.');
+    materials.append(note);
 
     const log = el('div', 'claude-log');
     const status = el('div', 'claude-note claude-busy');
@@ -500,12 +774,12 @@
       }
     });
 
-    function bubble(role, html, note) {
+    function bubble(role, html, extra) {
       const b = el('div', `claude-msg ${role}`);
       const body = el('div', 'claude-body');
       body.innerHTML = html;
       b.append(body);
-      if (note) b.append(el('div', 'claude-note', note));
+      if (extra) b.append(el('div', 'claude-note', extra));
       log.append(b);
       log.scrollTop = log.scrollHeight;
       return b;
@@ -522,7 +796,20 @@
       }
       if (!chat.messages.length) {
         log.append(el('div', 'claude-empty',
-          'Ask anything about this worksheet. Claude reads the PDFs ticked above and answers from them.'));
+          'Ask anything about this worksheet. Claude reads what\'s ticked above and answers from it.'));
+      }
+    }
+
+    function lock(sent) {
+      for (const c of controls) c.disabled = true;
+      note.textContent = 'To change the model or what Claude reads, start a new conversation.';
+      for (const m of sent) {
+        if (!m.notes) continue;
+        const row = [...materials.querySelectorAll('.claude-doc')][docs.findIndex(d => d.key === m.key)];
+        row?.querySelectorAll('.claude-pages, .claude-range').forEach(x => x.remove());
+        row?.append(el('span', 'claude-pages', m.pages
+          ? `pages ${describePages(m.pages)} of ${m.pageCount}`
+          : `all ${m.pageCount} pages`));
       }
     }
 
@@ -539,34 +826,32 @@
       const body = answer.querySelector('.claude-body');
       const onStatus = text => (status.textContent = text);
       const started = Date.now();
+      const first = !chat.messages.length;
 
       try {
-        const api = client();
         let messages;
-        if (!chat.messages.length) {
-          const chosen = docs.filter(d => d.on);
-          const blocks = await materialBlocks(chosen, onStatus);
+        let sent = null;
+        if (first) {
+          sent = await chooseMaterials(docs, question, onStatus);
+          const blocks = await materialBlocks(sent, onStatus);
           messages = [{ role: 'user', content: [...blocks, { type: 'text', text: question }] }];
-          chat.docs = chosen.map(d => d.key);
-          materials.querySelectorAll('input').forEach(b => (b.disabled = true));
-          lockNote.textContent = 'To change what Claude reads, start a new conversation.';
         } else {
-          const conversationDocs = chat.docs.map(key => docs.find(d => d.key === key) || { key, name: 'A PDF' });
-          messages = [...await withPdfData(chat.messages, conversationDocs), { role: 'user', content: question }];
+          const materialsSent = chat.docs.map(d => ({ ...d, ...(docs.find(x => x.key === d.key) || { name: 'A PDF' }) , pages: d.pages }));
+          messages = [...await withPdfData(chat.messages, materialsSent), { role: 'user', content: question }];
         }
         onStatus('Claude is reading and thinking…');
 
-        // Server-side fallbacks: if Claude Opus 5.5's safeguards decline, the request is
-        // re-run on Anthropic's recommended fallback model instead of failing
-        const stream = api.beta.messages.stream({
-          model: MODEL,
+        const settings = MODELS[model];
+        // Server-side fallbacks (Sonnet and Opus): if the model's safeguards decline, the
+        // request is re-run on Anthropic's recommended fallback model instead of failing
+        const stream = client().beta.messages.stream({
+          model,
           max_tokens: 32000,
           system: SYSTEM,
           thinking: { type: 'adaptive' },
-          output_config: { effort: 'high' },
+          output_config: { effort: settings.effort },
           cache_control: CACHE,
-          betas: ['server-side-fallback-2026-07-01'],
-          fallbacks: 'default',
+          ...(settings.fallbacks && { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }),
           messages,
         });
         let pending = null;
@@ -585,9 +870,13 @@
         if (final.stop_reason === 'refusal') {
           body.textContent = 'Claude declined to answer this. Try rephrasing the question.';
           answer.classList.add('error');
-          if (!chat.messages.length) chat.docs = null;
         } else {
           body.innerHTML = renderAnswer(textOf(final.content));
+          if (first) {
+            chat.model = model;
+            chat.docs = sent.map(m => ({ key: m.key, pages: m.pages, pageCount: m.pageCount }));
+            lock(sent);
+          }
           // The full content goes back unchanged on the next question, thinking blocks included
           chat.messages = forStorage([...messages, { role: 'assistant', content: final.content }]);
           if (!store.set(storageKey, JSON.stringify(chat))) {
@@ -595,7 +884,7 @@
           }
           const secs = Math.round((Date.now() - started) / 1000);
           const cut = final.stop_reason === 'max_tokens' ? ' The answer was cut off at the length limit.' : '';
-          answer.append(el('div', 'claude-note', `≈ ${dollars(costOf(final.usage))} · ${secs}s${cut}`));
+          answer.append(el('div', 'claude-note', `≈ ${dollars(costOf(final.usage, model))} · ${secs}s${cut}`));
         }
         if (!status.textContent.startsWith('This conversation')) status.textContent = '';
       } catch (err) {
@@ -603,7 +892,6 @@
         answer.classList.add('error');
         status.textContent = '';
         // Nothing was saved, so the question can just be asked again
-        if (!chat.messages.length) chat.docs = null;
         input.value = question;
       } finally {
         busy = false;
@@ -635,6 +923,8 @@
       return button('💬 Ask Claude', 'pdf-attach ask-claude', () => openChat(task),
         'Ask Claude about this worksheet, using the course\'s lecture notes');
     },
+    // For testing the page picking on real notes without calling the API
+    _test: { pageTexts, pickPages, queryTerms, parsePages, describePages, materialBlob, chooseMaterials, docsFor },
   };
 
   render();

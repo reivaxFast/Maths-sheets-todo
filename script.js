@@ -338,9 +338,9 @@ function combinedFileName(course, sheets) {
     : unsafeFileChars(`${course.name} Sheets ${numbers}.pdf`);
 }
 
-// Merges PDFs (Blobs) into one, in order. pdf-lib is only loaded the first time.
+// pdf-lib (window.PDFLib) is only loaded the first time it's needed
 let pdfLibLoaded = null;
-async function mergePdfs(blobs) {
+function loadPdfLib() {
   pdfLibLoaded ||= new Promise((resolve, reject) => {
     const s = document.createElement('script');
     s.src = 'node_modules/pdf-lib/dist/pdf-lib.min.js';
@@ -351,7 +351,12 @@ async function mergePdfs(blobs) {
     };
     document.head.append(s);
   });
-  await pdfLibLoaded;
+  return pdfLibLoaded;
+}
+
+// Merges PDFs (Blobs) into one, in order
+async function mergePdfs(blobs) {
+  await loadPdfLib();
   const { PDFDocument } = window.PDFLib;
   const merged = await PDFDocument.create();
   for (const blob of blobs) {
