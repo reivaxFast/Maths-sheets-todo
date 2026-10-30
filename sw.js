@@ -5,12 +5,13 @@
 // anything else from other sites always go to the network.
 
 // Changing the name clears the old cache, e.g. after updating a library in node_modules
-const CACHE = 'worksheets-v2';
+const CACHE = 'worksheets-v3';
 const APP_FILES = [
   './',
   'index.html',
   'style.css',
   'script.js',
+  'claude.js',
   'sync.js',
   'mobile.js',
   'web.js',

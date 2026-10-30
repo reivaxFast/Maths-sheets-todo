@@ -811,3 +811,151 @@ body.scanning { overflow: hidden; }
     box-shadow: 0 0 0 3px #fff;
 }
 .scan-shutter:active { background: #ddd; }
+
+/* Ask Claude (claude.js) */
+.ask-claude {
+    color: #d7a26a !important;
+    border-color: #6a5440 !important;
+}
+.ask-claude:hover { color: #f0c08e !important; border-color: #d7a26a !important; }
+#claude-btn { color: #d7a26a; }
+.claude-modal { z-index: 25; }
+.claude-connect { width: min(560px, calc(100% - 2rem)); }
+.claude-connect p { line-height: 1.45; }
+.claude-connect a { color: #b5aaff; }
+.claude-key-form {
+    display: flex;
+    gap: 0.5rem;
+    margin: 0.75rem 0 0.5rem;
+}
+.claude-key-form input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.5rem;
+    font-family: Consolas, monospace;
+    background: #2a2a3c;
+    color: #eee;
+    border: 1px solid #44445a;
+    border-radius: 6px;
+}
+.claude-key-form button {
+    padding: 0.5rem 1rem;
+    background: #7c6cf0;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+}
+.claude-status { min-height: 1.2em; color: #9fe0bd; font-size: 0.9rem; }
+.claude-status.error { color: #f0a0a0; }
+.claude-modal .secondary {
+    padding: 0.35rem 0.8rem;
+    font-size: 0.9rem;
+    background: transparent;
+    color: #ccc;
+    border: 1px solid #44445a;
+    border-radius: 6px;
+}
+.claude-modal .secondary.danger { color: #f0a0a0; border-color: #6a3a40; }
+
+body.chatting { overflow: hidden; }
+.claude-chat {
+    display: flex;
+    flex-direction: column;
+    width: min(860px, calc(100% - 2rem));
+    height: calc(100% - 3rem);
+    max-height: none;
+    overflow: hidden;
+}
+.claude-chat .modal-head h2 { font-size: 1.1rem; }
+.claude-head-actions { display: flex; gap: 0.4rem; }
+.claude-materials {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 0.9rem;
+    padding: 0.5rem 0.6rem;
+    margin-bottom: 0.6rem;
+    font-size: 0.85rem;
+    background: #24243a;
+    border-radius: 8px;
+}
+.claude-doc { display: flex; align-items: center; gap: 0.35rem; color: #ccc; }
+.claude-doc input { accent-color: #7c6cf0; }
+.claude-note { flex: 1 1 100%; font-size: 0.78rem; color: #888; }
+.claude-log {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.25rem 0.2rem;
+}
+.claude-empty { margin: 2rem auto; max-width: 30rem; text-align: center; color: #888; }
+.claude-empty.error { color: #f0a0a0; }
+.claude-msg {
+    margin: 0 0 0.9rem;
+    padding: 0.65rem 0.85rem;
+    border-radius: 10px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+}
+.claude-msg.user {
+    margin-left: 15%;
+    background: #33334f;
+}
+.claude-msg.assistant {
+    margin-right: 5%;
+    background: #26263a;
+    border-left: 3px solid #d7a26a;
+}
+.claude-msg.error { border-left-color: #f07171; color: #f0a0a0; }
+.claude-msg .claude-note { margin-top: 0.4rem; }
+.claude-body > :first-child { margin-top: 0; }
+.claude-body > :last-child { margin-bottom: 0; }
+.claude-body pre {
+    overflow-x: auto;
+    padding: 0.6rem;
+    background: #1b1b28;
+    border-radius: 6px;
+}
+.claude-body code { font-family: Consolas, monospace; font-size: 0.9em; }
+.claude-body a { color: #b5aaff; }
+.claude-body .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.2rem 0; }
+.claude-thinking { color: #888; font-style: italic; }
+/* Not stretched like other notes: the conversation above it gets the spare height */
+.claude-busy { flex: none; min-height: 1.1em; margin: 0.3rem 0; }
+.claude-ask {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-end;
+}
+.claude-ask textarea {
+    flex: 1;
+    min-width: 0;
+    padding: 0.55rem;
+    font: inherit;
+    background: #2a2a3c;
+    color: #eee;
+    border: 1px solid #44445a;
+    border-radius: 8px;
+    resize: none;
+}
+.claude-ask button {
+    padding: 0.6rem 1.2rem;
+    font-weight: 600;
+    background: #d7a26a;
+    color: #1e1e2e;
+    border: none;
+    border-radius: 8px;
+}
+.claude-ask button:disabled { opacity: 0.5; }
+
+@media (max-width: 640px) {
+    .claude-chat {
+        width: 100%;
+        height: 100%;
+        border-radius: 0;
+        padding: max(0.75rem, var(--safe-area-inset-top, env(safe-area-inset-top, 0px))) 0.75rem
+            max(0.75rem, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    }
+    .claude-modal { padding-top: 0 !important; align-items: stretch !important; }
+    .claude-msg.user { margin-left: 8%; }
+    .claude-msg.assistant { margin-right: 0; }
+}

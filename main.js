@@ -109,6 +109,31 @@ ipcMain.handle('open-email-draft', async (event, { to, subject, body, attachment
     }
 });
 
+// Ask Claude (claude.js): uploads a PDF to the Anthropic Files API. Anthropic's /v1/files
+// doesn't accept requests from web pages, so the window hands the upload to this process.
+const ANTHROPIC_FILES = 'https://api.anthropic.com/v1/files';
+const anthropicHeaders = apiKey => ({ 'x-api-key': String(apiKey), 'anthropic-version': '2023-06-01' });
+
+ipcMain.handle('claude-upload', async (event, { apiKey, name, data }) => {
+    try {
+        const form = new FormData();
+        form.append('file', new Blob([Buffer.from(data)], { type: 'application/pdf' }), path.basename(String(name)));
+        const res = await fetch(ANTHROPIC_FILES, { method: 'POST', headers: anthropicHeaders(apiKey), body: form });
+        const body = await res.json().catch(() => ({}));
+        return res.ok
+            ? { ok: true, id: body.id }
+            : { ok: false, status: res.status, message: body.error?.message };
+    } catch {
+        return { ok: false }; // No connection
+    }
+});
+
+ipcMain.handle('claude-delete', async (event, { apiKey, id }) => {
+    try {
+        await fetch(`${ANTHROPIC_FILES}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: anthropicHeaders(apiKey) });
+    } catch {}
+});
+
 // Updates come from the GitHub releases named in package.json's build.publish.
 // Nothing downloads until the Update button is clicked.
 autoUpdater.autoDownload = false;

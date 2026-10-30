@@ -120,6 +120,42 @@ if (window.Capacitor?.isNativePlatform()) {
         return { ok: false };
       }
     },
+    // Ask Claude (claude.js): uploads a PDF to the Anthropic Files API. Anthropic's /v1/files
+    // doesn't accept requests from web pages, so it goes through Android's own networking.
+    async claudeUpload({ apiKey, name, data }) {
+      try {
+        const res = await CapacitorHttp.request({
+          url: 'https://api.anthropic.com/v1/files',
+          method: 'POST',
+          // Capacitor adds the multipart boundary; the type must be set for it to send a body
+          headers: { 'Content-Type': 'multipart/form-data', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          dataType: 'formData',
+          data: [{
+            type: 'base64File',
+            key: 'file',
+            value: arrayBufferToBase64(data),
+            fileName: safeName(name),
+            contentType: 'application/pdf',
+          }],
+          responseType: 'json',
+        });
+        const body = typeof res.data === 'string' ? JSON.parse(res.data || '{}') : res.data || {};
+        return res.status >= 200 && res.status < 300
+          ? { ok: true, id: body.id }
+          : { ok: false, status: res.status, message: body.error?.message };
+      } catch {
+        return { ok: false }; // No connection
+      }
+    },
+    async claudeDelete({ apiKey, id }) {
+      try {
+        await CapacitorHttp.request({
+          url: `https://api.anthropic.com/v1/files/${encodeURIComponent(id)}`,
+          method: 'DELETE',
+          headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        });
+      } catch {}
+    },
     onImportFile() {},
   };
 

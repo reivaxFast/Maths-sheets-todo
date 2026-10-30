@@ -14,6 +14,8 @@ const files = [
   'index.html',
   'style.css',
   'script.js',
+  'claude.js',
+  'vendor/', // Folders end in /: copied whole (built by scripts/build-vendor.js)
   'sync.js',
   'mobile.js',
   'web.js',
@@ -38,6 +40,10 @@ if (!android) files.push(...websiteScanner);
 fs.rmSync(out, { recursive: true, force: true });
 for (const file of files) {
   const target = path.join(out, file);
+  if (file.endsWith('/')) {
+    fs.cpSync(path.join(root, file), target, { recursive: true });
+    continue;
+  }
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(path.join(root, file), target);
 }

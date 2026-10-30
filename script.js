@@ -493,6 +493,8 @@ function render() {
         }
       }
     }
+    // Ask Claude about the worksheet (claude.js), once it has one
+    if (task.problemName && window.ClaudeTutor) pdf.append(ClaudeTutor.taskButton(task));
     info.append(pdf);
 
     // The course's notes, so they can be opened straight from the task (added in Courses)
