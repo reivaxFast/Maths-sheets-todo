@@ -236,7 +236,11 @@ h2 {
     border-radius: 6px;
 }
 .task.status-mostly { border-left-color: #e0b341; }
-.task.status-complete { border-left-color: #4caf7a; }
+.task.status-complete {
+    background: #213a2e;
+    border-left-color: #4caf7a;
+}
+.task.status-complete .title { color: #9fe0bd; }
 .task.status-submitted { border-left-color: #4a9ff0; opacity: 0.7; }
 .task.overdue .due { color: #f07171; font-weight: 600; }
 

@@ -9,12 +9,12 @@ const sheetInput = document.getElementById('task-sheet');
 const dueInput = document.getElementById('task-due');
 const timeInput = document.getElementById('task-time');
 const courseSelect = document.getElementById('task-course');
-// "Mostly complete" and no status both count as incomplete
-const SECTIONS = ['incomplete', 'complete', 'submitted'];
+// Only submitted tasks move to their own section; completed ones stay in the list (shown green)
+const SECTIONS = ['incomplete', 'submitted'];
 const NEW_COURSE = '__new';
 
 function sectionOf(task) {
-  return task.status === 'complete' || task.status === 'submitted' ? task.status : 'incomplete';
+  return task.status === 'submitted' ? 'submitted' : 'incomplete';
 }
 
 let tasks = load('tasks');
