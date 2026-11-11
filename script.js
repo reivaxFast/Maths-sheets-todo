@@ -20,6 +20,26 @@ function sectionOf(task) {
 let tasks = load('tasks');
 let courses = load('courses');
 
+// "Show" filter: a course id, or '' for all courses. Kept on this device only.
+const FILTER_STORAGE = 'courseFilter';
+const courseFilter = document.getElementById('course-filter');
+let filterCourse = '';
+try {
+  filterCourse = localStorage.getItem(FILTER_STORAGE) || '';
+} catch {}
+
+courseFilter.addEventListener('change', () => {
+  filterCourse = courseFilter.value;
+  try {
+    localStorage.setItem(FILTER_STORAGE, filterCourse);
+  } catch {}
+  // Ticked tasks that are now hidden shouldn't go into an email without being seen
+  if (filterCourse) {
+    for (const t of tasks) if (t.courseId !== filterCourse) selected.delete(t.id);
+  }
+  render();
+});
+
 function load(key) {
   try {
     return JSON.parse(localStorage.getItem(key)) || [];
@@ -391,8 +411,18 @@ function render() {
     counts[section] = 0;
   }
 
+  // The course filter's options; a filtered course that's since been deleted shows all
+  courseFilter.innerHTML = '';
+  courseFilter.append(new Option('All courses', ''));
+  for (const c of [...courses].sort((a, b) => a.name.localeCompare(b.name))) {
+    courseFilter.append(new Option(c.name, c.id));
+  }
+  if (!courses.some(c => c.id === filterCourse)) filterCourse = '';
+  courseFilter.value = filterCourse;
+
   const sorted = [...tasks].sort((a, b) => dueKey(a).localeCompare(dueKey(b)));
   for (const task of sorted) {
+    if (filterCourse && task.courseId !== filterCourse) continue;
     const section = sectionOf(task);
     counts[section]++;
 
@@ -549,7 +579,7 @@ function render() {
     if (counts[section] === 0) {
       const li = document.createElement('li');
       li.className = 'empty';
-      li.textContent = 'Nothing here.';
+      li.textContent = filterCourse ? 'Nothing here for this course.' : 'Nothing here.';
       document.getElementById('list-' + section).append(li);
     }
   }
