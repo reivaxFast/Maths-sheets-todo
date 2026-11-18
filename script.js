@@ -467,17 +467,6 @@ function render() {
     meta.append(due, course);
     info.append(title, meta);
 
-    const courseNotes = courseOf(task)?.notes;
-    if (courseNotes) {
-      // Shows one line until clicked, then the full notes
-      const notes = document.createElement('div');
-      notes.className = 'task-notes';
-      notes.title = 'Click to show all';
-      notes.textContent = courseNotes;
-      notes.addEventListener('click', () => notes.classList.toggle('expanded'));
-      info.append(notes);
-    }
-
     const pdf = document.createElement('div');
     pdf.className = 'pdf';
     for (const kind of Object.values(PDF_KINDS)) {

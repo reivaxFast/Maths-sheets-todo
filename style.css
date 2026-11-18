@@ -362,21 +362,6 @@ h2 {
     margin-top: 0;
 }
 
-.task-notes {
-    margin-top: 0.3rem;
-    padding-left: 0.5rem;
-    border-left: 2px solid #44445a;
-    font-size: 0.8rem;
-    color: #aaa;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    cursor: pointer;
-}
-.task-notes::before { content: '📝 '; }
-.task-notes.expanded {
-    white-space: pre-wrap;
-}
 .course-row input, #course-form input {
     flex: 1;
     min-width: 0;
