@@ -519,27 +519,23 @@ function render() {
         }
       }
     }
+    // The course's notes, so they can be opened straight from the task (added in Courses).
+    // Same row as the task's PDFs, which wraps onto more lines only when it doesn't fit.
+    const taskCourse = courseOf(task);
+    const several = (taskCourse?.files?.length || 0) > 1;
+    (taskCourse?.files || []).forEach((file, i) => {
+      const view = document.createElement('button');
+      view.className = 'pdf-link course-notes-link';
+      view.title = `Course notes: ${file.name}`;
+      // Numbered when a course has more than one set, so they can be told apart
+      view.textContent = several ? `📚 Notes ${i + 1}` : '📚 Notes';
+      view.addEventListener('click', () => openPdf(noteKey(taskCourse, file), file.name));
+      pdf.append(view);
+    });
+
     // Ask Claude about the worksheet (claude.js), once it has one
     if (task.problemName && window.ClaudeTutor) pdf.append(ClaudeTutor.taskButton(task));
     info.append(pdf);
-
-    // The course's notes, so they can be opened straight from the task (added in Courses)
-    const taskCourse = courseOf(task);
-    if (taskCourse?.files?.length) {
-      const notesRow = document.createElement('div');
-      notesRow.className = 'pdf task-course-notes';
-      const several = taskCourse.files.length > 1;
-      taskCourse.files.forEach((file, i) => {
-        const view = document.createElement('button');
-        view.className = 'pdf-link';
-        view.title = `Course notes: ${file.name}`;
-        // Numbered when a course has more than one set, so they can be told apart
-        view.textContent = several ? `📚 Notes ${i + 1}` : '📚 Notes';
-        view.addEventListener('click', () => openPdf(noteKey(taskCourse, file), file.name));
-        notesRow.append(view);
-      });
-      info.append(notesRow);
-    }
 
     const options = document.createElement('div');
     options.className = 'options';

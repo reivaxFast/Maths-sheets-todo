@@ -3,7 +3,8 @@ body {
     background: #1e1e2e;
     color: #eee;
     padding: 2rem;
-    max-width: 900px;
+    /* Wide enough on large screens for a task's PDFs and Ask Claude to fit on one line */
+    max-width: 1200px;
     margin: 0 auto;
 }
 button {
@@ -43,7 +44,7 @@ header {
 .actions #update-btn:disabled { opacity: 0.75; cursor: default; }
 
 /* The course's notes, shown on each of its tasks */
-.task-course-notes .pdf-link {
+.pdf-link.course-notes-link {
     color: #9fc8ff;
 }
 /* A coloured dot shows the sync state once signed in */
