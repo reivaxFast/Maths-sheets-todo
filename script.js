@@ -70,10 +70,12 @@ function courseOf(task) {
 // submissions are keyed by plain task id (as before), the others by "id:problem" and "id:marked".
 // Marked work can only be added once the task is submitted (`afterSubmit`).
 // `scannable` kinds get a Scan button in the Android app.
+// `display` is the short name on task cards (the real file name is in the button's tooltip,
+// and is still used when opening, saving, sharing and emailing).
 const PDF_KINDS = {
-  problem: { field: 'problemName', key: id => `${id}:problem`, icon: '📋', label: 'Problem sheet' },
-  work: { field: 'pdfName', key: id => id, icon: '📄', label: 'Submission', scannable: true },
-  marked: { field: 'markedName', key: id => `${id}:marked`, icon: '✅', label: 'Marked work', afterSubmit: true, scannable: true },
+  problem: { field: 'problemName', key: id => `${id}:problem`, icon: '📋', label: 'Problem sheet', display: 'Sheet' },
+  work: { field: 'pdfName', key: id => id, icon: '📄', label: 'Submission', display: 'Submission', scannable: true },
+  marked: { field: 'markedName', key: id => `${id}:marked`, icon: '✅', label: 'Marked work', display: 'Marked work', afterSubmit: true, scannable: true },
 };
 
 function pdfKeys(task) {
@@ -476,7 +478,7 @@ function render() {
         view.className = 'pdf-link';
         view.title = `${kind.label}: ${name}` +
           (name !== task[kind.field] ? ` (uploaded as ${task[kind.field]})` : '');
-        view.textContent = `${kind.icon} ${name}`;
+        view.textContent = `${kind.icon} ${kind.display}`;
         view.addEventListener('click', () => openPdf(kind.key(task.id), name));
         pdf.append(view);
         if (kind === PDF_KINDS.work) {
@@ -526,14 +528,16 @@ function render() {
     if (taskCourse?.files?.length) {
       const notesRow = document.createElement('div');
       notesRow.className = 'pdf task-course-notes';
-      for (const file of taskCourse.files) {
+      const several = taskCourse.files.length > 1;
+      taskCourse.files.forEach((file, i) => {
         const view = document.createElement('button');
         view.className = 'pdf-link';
         view.title = `Course notes: ${file.name}`;
-        view.textContent = `📚 ${file.name}`;
+        // Numbered when a course has more than one set, so they can be told apart
+        view.textContent = several ? `📚 Notes ${i + 1}` : '📚 Notes';
         view.addEventListener('click', () => openPdf(noteKey(taskCourse, file), file.name));
         notesRow.append(view);
-      }
+      });
       info.append(notesRow);
     }
 
