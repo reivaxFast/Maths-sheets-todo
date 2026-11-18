@@ -448,26 +448,17 @@ function render() {
 
     const info = document.createElement('div');
     info.className = 'info';
+    // Title and due date on one line (wrapping under each other if there isn't room)
+    const head = document.createElement('div');
+    head.className = 'task-head';
     const title = document.createElement('span');
     title.className = 'title';
     title.textContent = taskTitle(task);
-
-    const meta = document.createElement('div');
-    meta.className = 'meta';
     const due = document.createElement('span');
     due.className = 'due';
     due.textContent = 'Due ' + formatDate(task.due) + (task.time ? ', ' + formatTime(task.time) : '');
-    const course = document.createElement('select');
-    course.className = 'course-tag';
-    course.title = 'Course';
-    courseOptions(course, task.courseId, false);
-    course.addEventListener('change', () => {
-      task.courseId = course.value || null;
-      save();
-      render();
-    });
-    meta.append(due, course);
-    info.append(title, meta);
+    head.append(title, due);
+    info.append(head);
 
     const pdf = document.createElement('div');
     pdf.className = 'pdf';
