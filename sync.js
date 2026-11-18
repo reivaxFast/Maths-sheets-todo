@@ -222,7 +222,7 @@ async function syncPdfs() {
       const blob = await getPdf(key);
       if (!blob) continue;
       const { error } = await cloud.storage.from(PDF_BUCKET)
-        .upload(pdfPath(key), blob, { upsert: true, contentType: 'application/pdf' });
+        .upload(pdfPath(key), blob, { upsert: true, contentType: fileMime(name) });
       if (error && isTooBig(error)) {
         tooBig.add(String(key));
         showMessage(`${name} is too large to sync. It stays on this computer only.`, true);

@@ -977,3 +977,45 @@ span.claude-pages { font-size: 0.8rem; color: #d7a26a; }
     .claude-msg.user { margin-left: 8%; }
     .claude-msg.assistant { margin-right: 0; }
 }
+
+/* HTML and Python submissions, shown in the app */
+.code-box {
+    width: min(1000px, calc(100% - 2rem));
+    height: calc(100% - 4rem);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.code-box .modal-head { gap: 0.75rem; }
+.code-box .modal-head h2 {
+    font-size: 1.05rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.code-actions { display: flex; gap: 0.5rem; flex: none; }
+.code-actions button { font-size: 0.9rem; padding: 0.35rem 0.9rem; }
+.code-frame {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    border: 1px solid #44445a;
+    border-radius: 6px;
+    background: #fff;
+}
+.code-view {
+    flex: 1;
+    min-height: 0;
+    margin: 0;
+    padding: 0.75rem;
+    overflow: auto;
+    background: #151521;
+    border: 1px solid #44445a;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font: 0.85rem/1.45 Consolas, 'Cascadia Mono', Menlo, monospace;
+    white-space: pre;
+    tab-size: 4;
+}
+.code-frame[hidden], .code-view[hidden] { display: none; }

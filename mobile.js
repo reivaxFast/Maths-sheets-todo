@@ -57,7 +57,7 @@ if (window.Capacitor?.isNativePlatform()) {
     async openPdf(name, data) {
       try {
         const uri = await writeCacheFile(name, arrayBufferToBase64(data));
-        await FileOpener.open({ filePath: uri, contentType: 'application/pdf' });
+        await FileOpener.open({ filePath: uri, contentType: fileMime(name) });
         return { ok: true };
       } catch {
         return { ok: false };

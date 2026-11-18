@@ -74,7 +74,7 @@ function courseOf(task) {
 // and is still used when opening, saving, sharing and emailing).
 const PDF_KINDS = {
   problem: { field: 'problemName', key: id => `${id}:problem`, icon: '📋', label: 'Problem sheet', display: 'Sheet' },
-  work: { field: 'pdfName', key: id => id, icon: '📄', label: 'Submission', display: 'Submission', scannable: true },
+  work: { field: 'pdfName', key: id => id, icon: '📄', label: 'Submission', display: 'Submission', scannable: true, types: ['pdf', 'html', 'htm', 'py'] },
   marked: { field: 'markedName', key: id => `${id}:marked`, icon: '✅', label: 'Marked work', display: 'Marked work', afterSubmit: true, scannable: true },
 };
 
@@ -118,18 +118,38 @@ const deletePdf = id => pdfStore('readwrite', s => s.delete(id));
 
 const pdfInput = document.createElement('input');
 pdfInput.type = 'file';
-pdfInput.accept = 'application/pdf,.pdf';
 let pdfTarget = null; // { task, kind }
+
+// Files are PDFs, except that submissions can also be HTML or Python (some courses take code).
+// The type always comes from the file name, since stored and synced copies don't keep theirs.
+const FILE_TYPES = { pdf: 'application/pdf', html: 'text/html', htm: 'text/html', py: 'text/x-python' };
+function fileExt(name) {
+  const ext = (/\.([a-z0-9]+)$/i.exec(name || '')?.[1] || '').toLowerCase();
+  return FILE_TYPES[ext] ? ext : 'pdf';
+}
+const fileMime = name => FILE_TYPES[fileExt(name)];
+const isPdfName = name => fileMime(name) === 'application/pdf';
+const kindTypes = kind => kind.types || ['pdf'];
+
+function choosePdf(task, kind) {
+  pdfTarget = { task, kind };
+  pdfInput.accept = kindTypes(kind).map(t => `.${t}`).join(',');
+  pdfInput.click();
+}
 
 pdfInput.addEventListener('change', async () => {
   const file = pdfInput.files[0];
   pdfInput.value = '';
   if (!file || !pdfTarget) return;
-  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-    showMessage('Please choose a PDF file.', true);
+  const types = kindTypes(pdfTarget.kind);
+  const ext = /\.([a-z0-9]+)$/i.exec(file.name)?.[1].toLowerCase();
+  if (!types.includes(ext) && !(file.type === 'application/pdf' && types.includes('pdf'))) {
+    showMessage(types.length > 1 ? 'Please choose a PDF, HTML or Python (.py) file.' : 'Please choose a PDF file.', true);
     return;
   }
-  await storePdf(pdfTarget.task, pdfTarget.kind, file, file.name);
+  // A PDF without ".pdf" on the end gets it, so its type is known later
+  const name = file.type === 'application/pdf' && !/\.pdf$/i.test(file.name) ? `${file.name}.pdf` : file.name;
+  await storePdf(pdfTarget.task, pdfTarget.kind, file, name);
 });
 
 async function storePdf(task, kind, blob, name) {
@@ -172,7 +192,7 @@ async function savePdfCopy(key, name) {
     return;
   }
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+  a.href = URL.createObjectURL(new Blob([blob], { type: fileMime(name) }));
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
@@ -205,6 +225,63 @@ notesInput.addEventListener('change', async () => {
   render();
 });
 
+// Shows an HTML or Python submission in the app. HTML is shown as a page in a sandboxed frame
+// (its own origin, so its scripts can't reach the app's storage), with a button for the code.
+function showCodeFile(name, text) {
+  const modal = document.createElement('div');
+  modal.className = 'modal code-modal';
+  const box = document.createElement('div');
+  box.className = 'modal-box code-box';
+  const head = document.createElement('div');
+  head.className = 'modal-head';
+  const title = document.createElement('h2');
+  title.textContent = name;
+  title.title = name;
+  const actions = document.createElement('div');
+  actions.className = 'code-actions';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = 'Close';
+
+  const code = document.createElement('pre');
+  code.className = 'code-view';
+  code.textContent = text;
+  let frame = null;
+  if (fileMime(name) === 'text/html') {
+    frame = document.createElement('iframe');
+    frame.className = 'code-frame';
+    frame.sandbox = 'allow-scripts';
+    frame.srcdoc = text;
+    frame.title = name;
+    code.hidden = true;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'secondary';
+    toggle.textContent = 'Show code';
+    toggle.addEventListener('click', () => {
+      code.hidden = !code.hidden;
+      frame.hidden = !code.hidden;
+      toggle.textContent = code.hidden ? 'Show code' : 'Show page';
+    });
+    actions.append(toggle);
+  }
+  actions.append(close);
+  head.append(title, actions);
+  box.append(head, ...(frame ? [frame] : []), code);
+  modal.append(box);
+
+  const onKey = e => e.key === 'Escape' && hide();
+  function hide() {
+    modal.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+  close.addEventListener('click', hide);
+  modal.addEventListener('click', e => e.target === modal && hide());
+  document.addEventListener('keydown', onKey);
+  document.body.append(modal);
+  close.focus();
+}
+
 async function openPdf(key, name) {
   // Not here yet if it was attached on another device
   const blob = await getPdf(key) || await remotePdf(key);
@@ -212,6 +289,12 @@ async function openPdf(key, name) {
     showMessage(user
       ? "That PDF couldn't be found. If it was added on another device, try again once that device has synced."
       : "That PDF couldn't be found.", true);
+    return;
+  }
+  // HTML and Python: the desktop app opens HTML in the browser (from a temp file, away from
+  // the app's storage); everything else is shown in the app
+  if (!isPdfName(name) && !(fileExt(name) !== 'py' && window.files?.openEmailDraft)) {
+    showCodeFile(name, await blob.text());
     return;
   }
   if (window.files) {
@@ -271,9 +354,11 @@ function taskTitle(task) {
 const SHEET_PLACEHOLDER = /\{\s*sheet(?:\s*(?:number|no\.?|#))?\s*\}/gi;
 const unsafeFileChars = name => name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
 
-function formatFileName(format, sheet) {
-  const name = unsafeFileChars(format.replace(SHEET_PLACEHOLDER, sheet)).trim();
-  return /\.pdf$/i.test(name) ? name : name + '.pdf';
+// The extension follows the file, e.g. a Python submission gets ".py" whatever the format ends in.
+function formatFileName(format, sheet, ext = 'pdf') {
+  const name = unsafeFileChars(format.replace(SHEET_PLACEHOLDER, sheet)).trim()
+    .replace(/\.(pdf|html?|py)$/i, '');
+  return `${name}.${ext}`;
 }
 
 // The name a PDF is shown, opened, saved and shared under. Submissions use the course's
@@ -281,7 +366,9 @@ function formatFileName(format, sheet) {
 function pdfName(task, kind) {
   const uploaded = task[kind.field];
   const format = courseOf(task)?.fileFormat;
-  if (uploaded && kind === PDF_KINDS.work && format && task.sheet) return formatFileName(format, task.sheet);
+  if (uploaded && kind === PDF_KINDS.work && format && task.sheet) {
+    return formatFileName(format, task.sheet, fileExt(uploaded));
+  }
   return uploaded;
 }
 
@@ -469,7 +556,10 @@ function render() {
         view.className = 'pdf-link';
         view.title = `${kind.label}: ${name}` +
           (name !== task[kind.field] ? ` (uploaded as ${task[kind.field]})` : '');
-        view.textContent = `${kind.icon} ${kind.display}`;
+        // HTML and Python files show their type, e.g. "💻 Submission · PY"
+        view.textContent = isPdfName(name)
+          ? `${kind.icon} ${kind.display}`
+          : `💻 ${kind.display} · ${fileExt(name).toUpperCase()}`;
         view.addEventListener('click', () => openPdf(kind.key(task.id), name));
         pdf.append(view);
         if (kind === PDF_KINDS.work) {
@@ -495,10 +585,8 @@ function render() {
         const attach = document.createElement('button');
         attach.className = 'pdf-attach';
         attach.textContent = `+ ${kind.label}`;
-        attach.addEventListener('click', () => {
-          pdfTarget = { task, kind };
-          pdfInput.click();
-        });
+        if (kind.types) attach.title = `A PDF, HTML or Python (.py) file`;
+        attach.addEventListener('click', () => choosePdf(task, kind));
         pdf.append(attach);
         if (kind.scannable && window.files?.scanPdf) {
           const scan = document.createElement('button');
@@ -666,6 +754,12 @@ async function draftEmail(picked, combined = false) {
         'so the sheets can\'t be combined yet.', true);
       return;
     }
+    const code = blobs.filter(b => !isPdfName(pdfName(b.task, PDF_KINDS.work)));
+    if (code.length) {
+      showMessage(`Only PDFs can be combined, and the submission for ${sheetLabel(code.map(b => b.task.sheet || b.task.text))} ` +
+        `${code.length === 1 ? 'is an HTML or Python file' : 'are HTML or Python files'}. Use Draft email instead.`, true);
+      return;
+    }
     combinedBtn.disabled = true;
     combinedBtn.textContent = 'Combining…';
     try {
@@ -714,7 +808,8 @@ async function draftEmail(picked, combined = false) {
   if (result.mode === 'cancelled') return; // Share sheet closed: keep the selection
 
   // What's left to do, which depends on how the draft was opened
-  const pdfs = attachments.length === 1 ? 'PDF' : `${attachments.length} PDFs`;
+  const allPdf = attachments.every(a => isPdfName(a.name));
+  const pdfs = attachments.length === 1 ? (allPdf ? 'PDF' : 'file') : `${attachments.length} ${allPdf ? 'PDFs' : 'files'}`;
   let howTo = '';
   if (result.mode === 'mailto' && attachments.length) {
     // Desktop app with an email app that can't be handed attachments (folder opened beside it)
@@ -723,6 +818,8 @@ async function draftEmail(picked, combined = false) {
     howTo = result.copied
       ? " Pick your email app, then paste the tutor's address (it's copied) into To."
       : ` Pick your email app, and send it to ${result.to}.`;
+  } else if (result.mode === 'mailto-downloaded') {
+    howTo = ` Your phone can't share these files, so the ${pdfs} ${attachments.length === 1 ? 'was' : 'were'} downloaded: attach ${attachments.length === 1 ? 'it' : 'them'} from Downloads.`;
   } else if (result.mode === 'download') {
     howTo = ` Open the downloaded email file: Outlook opens it as a new email with the ${pdfs} attached.`;
   }
@@ -782,7 +879,7 @@ function buildEmail({ to, toName, subject, body, attachments }) {
     const name = encodeHeader(a.name.replace(/"/g, ''));
     lines.push(
       `--${boundary}`,
-      `Content-Type: application/pdf; name="${name}"`,
+      `Content-Type: ${fileMime(a.name)}; name="${name}"`,
       `Content-Disposition: attachment; filename="${name}"`,
       'Content-Transfer-Encoding: base64',
       '',
@@ -976,7 +1073,7 @@ function renderCourses() {
     format.type = 'text';
     format.className = 'course-format';
     format.placeholder = 'Submission file name (optional), e.g. Xavier_Howard_IntroCalculus_{sheet}.pdf';
-    format.title = '{sheet} is replaced with the sheet number';
+    format.title = '{sheet} is replaced with the sheet number. HTML and Python submissions keep their own extension (.html, .py)';
     format.value = course.fileFormat || '';
     const preview = document.createElement('div');
     preview.className = 'format-preview';
@@ -1308,7 +1405,7 @@ async function importText(text) {
   async function importPdf(key, entry) {
     if (!entry || typeof entry.name !== 'string' || typeof entry.data !== 'string') return false;
     try {
-      await putPdf(key, new Blob([base64ToBytes(entry.data)], { type: 'application/pdf' }));
+      await putPdf(key, new Blob([base64ToBytes(entry.data)], { type: fileMime(entry.name) }));
       return true;
     } catch {
       return false;

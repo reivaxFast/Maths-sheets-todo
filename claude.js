@@ -425,19 +425,21 @@
 
   // The document blocks for a conversation's materials: notes first (so they're the shared,
   // cached part), then the worksheet and anything else ticked
+  // An HTML or Python submission is sent as plain text rather than as a PDF
   async function materialBlocks(materials, onStatus) {
-    const blobs = [];
-    for (const m of materials) blobs.push(await materialBlob(m));
-    let sources;
+    const sources = [];
+    const pdfs = [];
+    for (let i = 0; i < materials.length; i++) {
+      const blob = await materialBlob(materials[i]);
+      if (isPdfName(materials[i].name)) pdfs.push({ i, m: materials[i], blob });
+      else sources[i] = { type: 'text', media_type: 'text/plain', data: await blob.text() };
+    }
     if (canUpload()) {
-      sources = [];
-      for (let i = 0; i < materials.length; i++) {
-        sources.push({ type: 'file', file_id: await uploadedId(materials[i], blobs[i], onStatus) });
-      }
-    } else {
+      for (const { i, m, blob } of pdfs) sources[i] = { type: 'file', file_id: await uploadedId(m, blob, onStatus) };
+    } else if (pdfs.length) {
       onStatus('Preparing the PDFs…');
-      const data = await inlineData(blobs, materials);
-      sources = data.map(d => ({ type: 'base64', media_type: 'application/pdf', data: d }));
+      const data = await inlineData(pdfs.map(p => p.blob), pdfs.map(p => p.m));
+      pdfs.forEach(({ i }, n) => (sources[i] = { type: 'base64', media_type: 'application/pdf', data: data[n] }));
     }
     const blocks = materials.map((m, i) => ({ type: 'document', source: sources[i], title: titleOf(m) }));
     const lastNotes = materials.map(m => m.notes).lastIndexOf(true);
@@ -460,9 +462,10 @@
     if (!first || typeof first.content === 'string' || !first.content.some(b => b.source?.data === null)) {
       return messages;
     }
+    const pdfs = materials.filter(m => isPdfName(m.name));
     const blobs = [];
-    for (const m of materials) blobs.push(await materialBlob(m));
-    const data = await inlineData(blobs, materials);
+    for (const m of pdfs) blobs.push(await materialBlob(m));
+    const data = await inlineData(blobs, pdfs);
     let i = 0;
     const content = first.content.map(b => b.source?.data === null
       ? { ...b, source: { ...b.source, data: data[i++] } }

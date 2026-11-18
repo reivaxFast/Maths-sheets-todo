@@ -3,7 +3,8 @@
 // and opened offline. Does nothing in the apps, which bring their own `window.files`.
 
 if (!window.files && !window.Capacitor?.isNativePlatform()) {
-  const pdfFile = (name, data) => new File([data], name, { type: 'application/pdf' });
+  // The type comes from the name: submissions can also be HTML or Python (fileMime, script.js)
+  const pdfFile = (name, data) => new File([data], name, { type: typeof fileMime === 'function' ? fileMime(name) : 'application/pdf' });
 
   // Phones can hand files to other apps through the share sheet; most computers can't
   let canShareFiles = false;
@@ -20,6 +21,13 @@ if (!window.files && !window.Capacitor?.isNativePlatform()) {
   }
 
   const shareCancelled = e => e?.name === 'AbortError';
+  const shareable = files => {
+    try {
+      return !!navigator.canShare?.({ files });
+    } catch {
+      return false;
+    }
+  };
 
   window.files = {
     // Opens in a new tab, where the browser's own PDF viewer shows it
@@ -38,18 +46,26 @@ if (!window.files && !window.Capacitor?.isNativePlatform()) {
     // - Computer: downloads the draft as an .eml file. Opening it in Outlook (new or classic)
     //   gives a new email with the PDFs attached.
     async draftEmail({ to, subject, body, attachments, eml, toName }) {
-      if (canShareFiles && attachments.length) {
+      // Phones only share some file types (PDFs and HTML, but not e.g. Python files)
+      const files = attachments.map(a => pdfFile(a.name, a.data));
+      if (canShareFiles && attachments.length && shareable(files)) {
         let copied = false;
         try {
           await navigator.clipboard.writeText(to);
           copied = true;
         } catch {}
         try {
-          await navigator.share({ files: attachments.map(a => pdfFile(a.name, a.data)), title: subject, text: body });
+          await navigator.share({ files, title: subject, text: body });
           return { ok: true, mode: 'share', copied, to };
         } catch (e) {
           return shareCancelled(e) ? { ok: true, mode: 'cancelled' } : { ok: false };
         }
+      }
+      if (canShareFiles && attachments.length) {
+        // Files the phone won't share: downloaded, to attach from Downloads in the email app
+        for (const f of files) download(f.name, f);
+        location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        return { ok: true, mode: 'mailto-downloaded' };
       }
       if (!attachments.length) {
         location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -65,8 +81,13 @@ if (!window.files && !window.Capacitor?.isNativePlatform()) {
   // Only phones get Share; computers keep the Save button, which downloads
   if (canShareFiles) {
     window.files.sharePdf = async (name, data) => {
+      const file = pdfFile(name, data);
+      if (!shareable([file])) {
+        download(name, file); // e.g. a Python file, which phones won't share
+        return { ok: true };
+      }
       try {
-        await navigator.share({ files: [pdfFile(name, data)], title: name });
+        await navigator.share({ files: [file], title: name });
         return { ok: true };
       } catch (e) {
         return { ok: shareCancelled(e) };
