@@ -73,9 +73,9 @@ function courseOf(task) {
 // `display` is the short name on task cards (the real file name is in the button's tooltip,
 // and is still used when opening, saving, sharing and emailing).
 const PDF_KINDS = {
-  problem: { field: 'problemName', key: id => `${id}:problem`, icon: '📋', label: 'Problem sheet', display: 'Sheet' },
-  work: { field: 'pdfName', key: id => id, icon: '📄', label: 'Submission', display: 'Submission', scannable: true, types: ['pdf', 'html', 'htm', 'py'] },
-  marked: { field: 'markedName', key: id => `${id}:marked`, icon: '✅', label: 'Marked work', display: 'Marked work', afterSubmit: true, scannable: true },
+  problem: { field: 'problemName', rev: 'problemRev', key: id => `${id}:problem`, icon: '📋', label: 'Problem sheet', display: 'Sheet' },
+  work: { field: 'pdfName', rev: 'pdfRev', key: id => id, icon: '📄', label: 'Submission', display: 'Submission', scannable: true, types: ['pdf', 'html', 'htm', 'py'] },
+  marked: { field: 'markedName', rev: 'markedRev', key: id => `${id}:marked`, icon: '✅', label: 'Marked work', display: 'Marked work', afterSubmit: true, scannable: true },
 };
 
 function pdfKeys(task) {
@@ -86,8 +86,15 @@ function pdfKeys(task) {
 const noteKey = (course, file) => `${course.id}:notes:${file.id}`;
 
 // The PDFs an item refers to, as a Map of storage key to file name
+// Each stored file's identity for syncing: its name plus when it was added (its `rev`), so a
+// replacement with the same name, e.g. a rescan, still counts as a new file on other devices.
+// Files added before revs existed have none, and are known by their name alone.
+// (A line break separates them, since file names can't contain one.)
+const REV_SEPARATOR = '\n';
+const pdfIdentity = (name, rev) => (rev ? `${name}${REV_SEPARATOR}${rev}` : name);
 function taskPdfs(task) {
-  return new Map(Object.values(PDF_KINDS).filter(k => task[k.field]).map(k => [k.key(task.id), task[k.field]]));
+  return new Map(Object.values(PDF_KINDS).filter(k => task[k.field])
+    .map(k => [k.key(task.id), pdfIdentity(task[k.field], task[k.rev])]));
 }
 function coursePdfs(course) {
   return new Map((course.files || []).map(f => [noteKey(course, f), f.name]));
@@ -160,6 +167,7 @@ async function storePdf(task, kind, blob, name) {
     return false;
   }
   task[kind.field] = name;
+  task[kind.rev] = Date.now();
   save();
   render();
   return true;
@@ -577,6 +585,7 @@ function render() {
         remove.addEventListener('click', async () => {
           await deletePdf(kind.key(task.id));
           delete task[kind.field];
+          delete task[kind.rev];
           save();
           render();
         });
@@ -1268,7 +1277,7 @@ async function exportTasks(full) {
     exportedAt: new Date().toISOString(),
     // PDF names come back from the PDFs themselves, so they're left out here
     courses: courses.map(({ files, ...c }) => c),
-    tasks: tasks.map(({ problemName, pdfName, markedName, ...t }) => t),
+    tasks: tasks.map(({ problemName, pdfName, markedName, problemRev, pdfRev, markedRev, ...t }) => t),
   };
   let included = 0;
   let missing = 0;
@@ -1419,6 +1428,7 @@ async function importText(text) {
       const entry = incomingPdfs[kindId][task.id];
       if (task[kind.field] || !await importPdf(kind.key(task.id), entry)) continue;
       task[kind.field] = entry.name;
+      task[kind.rev] = Date.now();
       addedPdfs++;
     }
   }

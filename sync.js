@@ -18,9 +18,10 @@ const cloud = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPAB
 const SYNCED = { tasks: () => tasks, courses: () => courses };
 
 // What this device last sent or received, so a save can tell what changed:
-// { userId, tasks: { [id]: { json, at, dirty, deleted } }, courses: { ... }, pdfs: { [key]: name } }
+// { userId, tasks: { [id]: { json, at, dirty, deleted } }, courses: { ... }, pdfs: { [key]: identity } }
 // `at` is when the item was last edited, `dirty` means it hasn't been sent yet,
-// and `pdfs` holds the PDFs known to be in storage.
+// and `pdfs` holds the PDFs known to be in storage (by pdfIdentity, script.js: the name, plus
+// when it was added).
 let syncState = loadSyncState();
 let user = null;
 let channel = null;
@@ -108,13 +109,13 @@ const pdfsOf = (table, item) => (table === 'tasks' ? taskPdfs : coursePdfs)(item
 function remotePdfs(table, oldItem, newItem) {
   const before = oldItem ? pdfsOf(table, oldItem) : new Map();
   const after = newItem ? pdfsOf(table, newItem) : new Map();
-  for (const [key, name] of before) {
-    if (after.get(key) !== name) {
+  for (const [key, identity] of before) {
+    if (after.get(key) !== identity) {
       deletePdf(key).catch(() => {});
       delete syncState.pdfs[key];
     }
   }
-  for (const [key, name] of after) syncState.pdfs[key] = name;
+  for (const [key, identity] of after) syncState.pdfs[key] = identity;
 }
 
 async function pull() {
@@ -201,7 +202,25 @@ function failed() {
 // saved as JSON, so its keys are always strings.
 
 // Files live in a folder named after the user, which the storage rules require
-const pdfPath = key => `${user.id}/${String(key).replaceAll(':', '-')}`;
+// A file has its own path for each version, so another device can never download the old file
+// in place of a replacement that hasn't finished uploading (or keep it as if it were current).
+// Files from before versions existed keep the plain path.
+const identityName = identity => identity.split(REV_SEPARATOR)[0];
+function pdfPath(key, identity) {
+  const rev = identity?.split(REV_SEPARATOR)[1];
+  return `${user.id}/${String(key).replaceAll(':', '-')}${rev ? `-${rev}` : ''}`;
+}
+
+// Removes a stored version once the undo window has passed, unless it's wanted again by then
+function removeLater(key, identity) {
+  setTimeout(() => {
+    if (!user) return;
+    const current = [...storedPdfs()].find(([k]) => String(k) === key)?.[1];
+    if (current === undefined || pdfPath(key, current) !== pdfPath(key, identity)) {
+      cloud.storage.from(PDF_BUCKET).remove([pdfPath(key, identity)]);
+    }
+  }, (UNDO_SECONDS + 2) * 1000);
+}
 
 // Files over the storage size limit are skipped (and reported once) rather than retried forever
 const tooBig = new Set();
@@ -217,12 +236,14 @@ async function syncPdfs() {
   pdfsRunning = true;
   try {
     const refs = storedPdfs();
-    for (const [key, name] of refs) {
-      if (syncState.pdfs[key] === name || tooBig.has(String(key))) continue;
+    for (const [key, identity] of refs) {
+      const known = syncState.pdfs[key];
+      if (known === identity || tooBig.has(String(key))) continue;
       const blob = await getPdf(key);
       if (!blob) continue;
+      const name = identityName(identity);
       const { error } = await cloud.storage.from(PDF_BUCKET)
-        .upload(pdfPath(key), blob, { upsert: true, contentType: fileMime(name) });
+        .upload(pdfPath(key, identity), blob, { upsert: true, contentType: fileMime(name) });
       if (error && isTooBig(error)) {
         tooBig.add(String(key));
         showMessage(`${name} is too large to sync. It stays on this computer only.`, true);
@@ -230,18 +251,17 @@ async function syncPdfs() {
       }
       if (error) throw error;
       if (!user) return;
-      syncState.pdfs[key] = name;
+      syncState.pdfs[key] = identity;
       storeSyncState();
+      // Replaced: the old version isn't needed any more
+      if (known !== undefined && pdfPath(key, known) !== pdfPath(key, identity)) removeLater(String(key), known);
     }
     const wanted = new Set([...refs.keys()].map(String));
-    for (const key of Object.keys(syncState.pdfs)) {
+    for (const [key, identity] of Object.entries(syncState.pdfs)) {
       if (wanted.has(key)) continue;
       delete syncState.pdfs[key];
       // Waits out the undo window, so undoing a delete still has the uploaded copy
-      setTimeout(() => {
-        const stillWanted = [...storedPdfs().keys()].some(k => String(k) === key);
-        if (user && !stillWanted) cloud.storage.from(PDF_BUCKET).remove([pdfPath(key)]);
-      }, (UNDO_SECONDS + 2) * 1000);
+      removeLater(key, identity);
     }
     storeSyncState();
   } catch {
@@ -259,9 +279,13 @@ async function syncPdfs() {
 // A PDF attached on another device is downloaded the first time it's needed, then kept here
 async function remotePdf(key) {
   if (!user) return null;
-  const { data, error } = await cloud.storage.from(PDF_BUCKET).download(pdfPath(key));
+  const identity = [...storedPdfs()].find(([k]) => String(k) === String(key))?.[1];
+  if (identity === undefined) return null;
+  const { data, error } = await cloud.storage.from(PDF_BUCKET).download(pdfPath(key, identity));
   if (error) return null;
-  const blob = new Blob([data], { type: 'application/pdf' });
+  // Replaced again while downloading: this copy is already out of date
+  if ([...storedPdfs()].find(([k]) => String(k) === String(key))?.[1] !== identity) return null;
+  const blob = new Blob([data], { type: fileMime(identityName(identity)) });
   await putPdf(key, blob).catch(() => {});
   return blob;
 }
